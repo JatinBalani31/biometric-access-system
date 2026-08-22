@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ── Scanner background ──────────────────────────────────────────── -->
+    <color name="scanner_bg">#0D1117</color>
+
+    <!-- ── White / text ───────────────────────────────────────────────── -->
+    <color name="white">#FFFFFF</color>
+    <color name="white_70">#B3FFFFFF</color>
+    <color name="white_40">#66FFFFFF</color>
+
+    <!-- ── Access Granted (deep emerald) ──────────────────────────────── -->
+    <color name="granted_bg_start">#0A2E1A</color>
+    <color name="granted_bg_end">#0D3B22</color>
+    <color name="granted_text">#4ADE80</color>     <!-- Bright green -->
+    <color name="color_active">#22C55E</color>
+
+    <!-- ── Subscription Expired (warm amber) ──────────────────────────── -->
+    <color name="expired_bg_start">#2C1A00</color>
+    <color name="expired_bg_end">#3B2200</color>
+    <color name="expired_text">#FCD34D</color>    <!-- Amber yellow -->
+    <color name="color_expired">#F59E0B</color>
+
+    <!-- ── Not Recognized / Denied (deep red) ─────────────────────────── -->
+    <color name="denied_bg_start">#2A0A0A</color>
+    <color name="denied_bg_end">#3B0D0D</color>
+    <color name="denied_text">#F87171</color>     <!-- Soft red -->
+    <color name="color_denied">#EF4444</color>
+
+    <!-- ── Danger (admin logout button) ───────────────────────────────── -->
+    <color name="color_danger">#DC2626</color>
+
+    <!-- ── Face guide overlay ─────────────────────────────────────────── -->
+    <color name="face_guide_color">#80FFFFFF</color>
+    <color name="face_guide_active">#4ADE80</color>
+
+    <!-- ── Material theme colors ──────────────────────────────────────── -->
+    <color name="md_theme_primary">#6366F1</color>          <!-- Indigo -->
+    <color name="md_theme_on_primary">#FFFFFF</color>
+    <color name="md_theme_primary_container">#E0E7FF</color>
+    <color name="md_theme_surface">#111827</color>          <!-- Dark surface -->
+    <color name="md_theme_on_surface">#F9FAFB</color>
+    <color name="md_theme_surface_variant">#1F2937</color>
+    <color name="md_theme_background">#0F172A</color>
+    <color name="md_theme_on_background">#F1F5F9</color>
+</resources>

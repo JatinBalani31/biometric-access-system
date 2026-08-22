@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BiometricKiosk</string>
+    <string name="scanning_prompt">Position your face in the frame</string>
+    <string name="access_granted">ACCESS GRANTED</string>
+    <string name="access_denied">NOT RECOGNIZED</string>
+    <string name="subscription_expired">SUBSCRIPTION EXPIRED</string>
+    <string name="welcome_message">Welcome! Enjoy your session.</string>
+    <string name="not_recognized_message">Face not recognized.\nPlease check in at the front desk.</string>
+    <string name="days_remaining">%d days remaining</string>
+    <string name="plan_expired_msg">Plan expired — please renew at the front desk</string>
+    <string name="badge_active">● ACTIVE</string>
+    <string name="badge_expired">● EXPIRED</string>
+    <string name="admin_title">⚙ Admin Settings</string>
+    <string name="btn_save">Save Settings</string>
+    <string name="btn_force_sync">⟳  Force Sync Now</string>
+    <string name="btn_change_pin">🔑  Change Admin PIN</string>
+    <string name="btn_logout">Clear Device &amp; Log Out</string>
+    <string name="logout_confirm_title">Log Out &amp; Clear Device</string>
+    <string name="logout_confirm_msg">This will delete all cached face embeddings and clear device registration. The device will need to be re-registered. Continue?</string>
+    <string name="tap_to_dismiss">Tap to dismiss</string>
+    <string name="camera_required">Camera permission required for face recognition</string>
+    <string name="syncing">⏳ Loading subscriber data…</string>
+</resources>

@@ -1,0 +1,83 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+firebase-debug.log*
+firestore-debug.log*
+ui-debug.log*
+
+# Diagnostic reports & dumps
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+*.hprof
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Build output
+dist/
+dist-ssr/
+build/
+coverage/
+*.local
+
+# Secrets & Environment variables
+.env
+.env*.local
+.env.development
+.env.production
+.env.staging
+!.env.example
+*service-account*.json
+*serviceAccountKey*.json
+
+# Firebase & Emulators
+.firebase/
+.dataconnect/
+dataconnect-emulator-*.zip
+
+# Android / Gradle
+.gradle/
+**/build/
+kiosk-app/.gradle/
+kiosk-app/**/build/
+kiosk-app/local.properties
+*.apk
+*.aab
+*.aar
+.cxx/
+captures/
+
+# IDE & Editor configs
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.iml
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS Generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

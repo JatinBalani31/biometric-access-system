@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:clickable="true"
+    android:focusable="true">
+
+    <!-- Full-screen tinted background -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_result_scrim"
+        android:alpha="0.92" />
+
+    <!-- Result card — centered vertically -->
+    <LinearLayout
+        android:id="@+id/card_content"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="40dp">
+
+        <!-- Large status icon -->
+        <ImageView
+            android:id="@+id/iv_result_icon"
+            android:layout_width="120dp"
+            android:layout_height="120dp"
+            android:scaleType="fitCenter"
+            android:src="@drawable/ic_checkmark_circle"
+            android:importantForAccessibility="no" />
+
+        <!-- Result title (ACCESS GRANTED / NOT RECOGNIZED / SUBSCRIPTION EXPIRED) -->
+        <TextView
+            android:id="@+id/tv_result_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:textSize="36sp"
+            android:fontFamily="sans-serif-black"
+            android:textStyle="bold"
+            android:textAlignment="center"
+            android:letterSpacing="0.05" />
+
+        <!-- Subscriber name -->
+        <TextView
+            android:id="@+id/tv_subscriber_name"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:textSize="28sp"
+            android:fontFamily="sans-serif-medium"
+            android:textColor="@color/white"
+            android:textAlignment="center"
+            android:visibility="gone" />
+
+        <!-- Active/Expired badge -->
+        <TextView
+            android:id="@+id/tv_status_badge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textSize="20sp"
+            android:fontFamily="sans-serif-medium"
+            android:textStyle="bold"
+            android:textAlignment="center"
+            android:visibility="gone" />
+
+        <!-- Plan name -->
+        <TextView
+            android:id="@+id/tv_plan_info"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textSize="18sp"
+            android:textColor="#CCFFFFFF"
+            android:textAlignment="center"
+            android:visibility="gone" />
+
+        <!-- Days left -->
+        <TextView
+            android:id="@+id/tv_days_left"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textSize="16sp"
+            android:textColor="#AAFFFFFF"
+            android:textAlignment="center"
+            android:visibility="gone" />
+
+        <!-- Extra message (Welcome! / Please check in at front desk) -->
+        <TextView
+            android:id="@+id/tv_message"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:textSize="18sp"
+            android:textColor="#BBFFFFFF"
+            android:textAlignment="center"
+            android:visibility="gone" />
+
+    </LinearLayout>
+
+    <!-- Countdown ring in bottom-right corner -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="24dp">
+
+        <ProgressBar
+            android:id="@+id/progress_countdown"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:progress="100"
+            android:progressDrawable="@drawable/countdown_ring"
+            android:rotation="-90" />
+
+        <TextView
+            android:id="@+id/tv_countdown"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="5"
+            android:textColor="#88FFFFFF"
+            android:textSize="13sp"
+            android:textAlignment="center"
+            android:layout_gravity="center_horizontal" />
+
+    </LinearLayout>
+
+    <!-- Tap to dismiss hint -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="16dp"
+        android:text="Tap to dismiss"
+        android:textColor="#55FFFFFF"
+        android:textSize="13sp" />
+
+</FrameLayout>

@@ -1,0 +1,45 @@
+type User @table {
+  email: String!
+  subscriptionStatus: String!
+  createdAt: Timestamp!
+  displayName: String
+  phoneNumber: String
+}
+
+type UserSubscription @table {
+  planType: String!
+  startDate: Date!
+  expiryDate: Date!
+  status: String!
+  user: User!
+}
+
+type Device @table {
+  deviceName: String!
+  publicKey: String!
+  lastUsedAt: Timestamp!
+  user: User!
+}
+
+type PartnerApp @table {
+  appName: String!
+  apiKey: String!
+  callbackUrl: String!
+  organizationName: String
+}
+
+type AuthLog @table {
+  timestamp: Timestamp!
+  status: String!
+  ipAddress: String!
+  user: User!
+  partnerApp: PartnerApp!
+  device: Device!
+}
+
+type VaultItem @table {
+  title: String!
+  encryptedContent: String!
+  createdAt: Timestamp!
+  user: User!
+}

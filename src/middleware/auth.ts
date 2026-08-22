@@ -1,0 +1,387 @@
+import { Request, Response, NextFunction } from 'express';
+import { adminAuth } from '../lib/firebase-admin.ts';
+import { db } from '../db/index.ts';
+import { companyAdmins, tenantAdmins, tenants, devices } from '../db/schema.ts';
+import { eq, and } from 'drizzle-orm';
+import { AuthContext, ErrorResponse } from '../types/api.ts';
+
+export interface AuthenticatedRequest extends Request {
+  auth?: AuthContext;
+}
+
+/**
+ * Universal Authentication & Role Discovery Middleware
+ * Handles:
+ * 1. Device Token (x-device-token or Bearer dev_...)
+ * 2. Firebase ID Tokens
+ * 3. Simulated Dev Role headers for testing and API sandbox
+ */
+export async function authenticate(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  try {
+    const authHeader = req.headers.authorization;
+    const deviceTokenHeader = req.headers['x-device-token'] as string | undefined;
+    const simulatedRole = req.headers['x-simulated-role'] as string | undefined;
+    const simulatedTenantId = req.headers['x-simulated-tenant-id'] as string | undefined;
+    const simulatedEmail = req.headers['x-simulated-email'] as string | undefined;
+
+    // 1. Check for Device Token Authentication (Kiosk Devices)
+    let deviceToken = deviceTokenHeader;
+    if (!deviceToken && authHeader && authHeader.startsWith('Bearer dev_')) {
+      deviceToken = authHeader.replace('Bearer ', '').trim();
+    } else if (!deviceToken && authHeader && authHeader.startsWith('Device ')) {
+      deviceToken = authHeader.replace('Device ', '').trim();
+    }
+
+    if (deviceToken) {
+      let matchedDevice: any;
+      let tenant: any;
+
+      try {
+        const [dev] = await db
+          .select()
+          .from(devices)
+          .where(eq(devices.deviceToken, deviceToken))
+          .limit(1);
+        matchedDevice = dev;
+
+        if (matchedDevice) {
+          const [t] = await db
+            .select()
+            .from(tenants)
+            .where(eq(tenants.id, matchedDevice.tenantId))
+            .limit(1);
+          tenant = t;
+        }
+      } catch (err) {
+        const { memoryStore } = await import('../lib/memory-store.ts');
+        matchedDevice = memoryStore.devices.find((d) => d.deviceToken === deviceToken);
+        if (matchedDevice) {
+          tenant = memoryStore.tenants.find((t) => t.id === matchedDevice.tenantId);
+        }
+      }
+
+      if (!matchedDevice || matchedDevice.status === 'revoked') {
+        const errorRes: ErrorResponse = {
+          error: 'Invalid or revoked device token',
+          code: 'INVALID_DEVICE_TOKEN',
+        };
+        return res.status(401).json(errorRes);
+      }
+
+      if (!tenant || tenant.status === 'suspended') {
+        const errorRes: ErrorResponse = {
+          error: 'Tenant subscription is suspended. Device access denied.',
+          code: 'TENANT_SUSPENDED',
+        };
+        return res.status(403).json(errorRes);
+      }
+
+      req.auth = {
+        role: 'device',
+        tenantId: matchedDevice.tenantId,
+        tenantName: tenant.companyName,
+        tenantStatus: tenant.status,
+        deviceId: matchedDevice.id,
+        deviceName: matchedDevice.deviceName,
+      };
+
+      return next();
+    }
+
+    // 2. Check Simulated Testing Role Header (For instant UI sandbox & curl testing)
+    if (simulatedRole) {
+      if (simulatedRole === 'company_admin') {
+        req.auth = {
+          role: 'company_admin',
+          email: simulatedEmail || 'superadmin@platform.io',
+          uid: 'superadmin-mock-uid',
+        };
+        return next();
+      }
+
+      if (simulatedRole === 'tenant_admin') {
+        const tenantId = simulatedTenantId ? parseInt(simulatedTenantId, 10) : 1;
+        let tenant: any;
+
+        try {
+          const [t] = await db
+            .select()
+            .from(tenants)
+            .where(eq(tenants.id, tenantId))
+            .limit(1);
+          tenant = t;
+        } catch (err) {
+          const { memoryStore } = await import('../lib/memory-store.ts');
+          tenant = memoryStore.tenants.find((t) => t.id === tenantId);
+        }
+
+        if (!tenant) {
+          return res.status(404).json({
+            error: `Tenant with ID ${tenantId} not found`,
+            code: 'NOT_FOUND',
+          });
+        }
+
+        if (tenant.status === 'suspended') {
+          const errorRes: ErrorResponse = {
+            error: 'Tenant is suspended. Access restricted.',
+            code: 'TENANT_SUSPENDED',
+          };
+          return res.status(403).json(errorRes);
+        }
+
+        req.auth = {
+          role: 'tenant_admin',
+          tenantId: tenant.id,
+          tenantName: tenant.companyName,
+          tenantStatus: tenant.status,
+          email: simulatedEmail || `admin@${tenant.companyName.toLowerCase().replace(/[^a-z0-9]/g, '')}.com`,
+          uid: `tenant-admin-${tenantId}-uid`,
+        };
+        return next();
+      }
+
+      if (simulatedRole === 'device') {
+        const tenantId = simulatedTenantId ? parseInt(simulatedTenantId, 10) : 1;
+        let tenant: any;
+
+        try {
+          const [t] = await db
+            .select()
+            .from(tenants)
+            .where(eq(tenants.id, tenantId))
+            .limit(1);
+          tenant = t;
+        } catch (err) {
+          const { memoryStore } = await import('../lib/memory-store.ts');
+          tenant = memoryStore.tenants.find((t) => t.id === tenantId);
+        }
+
+        if (!tenant || tenant.status === 'suspended') {
+          return res.status(403).json({
+            error: 'Tenant is suspended',
+            code: 'TENANT_SUSPENDED',
+          });
+        }
+
+        req.auth = {
+          role: 'device',
+          tenantId: tenant.id,
+          tenantName: tenant.companyName,
+          tenantStatus: tenant.status,
+          deviceId: 999,
+          deviceName: 'Simulated Kiosk Gateway',
+        };
+        return next();
+      }
+    }
+
+    // 3. Check Firebase ID Token
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.replace('Bearer ', '').trim();
+
+      // Check if it's a known device token passed in standard Bearer
+      const [matchedDevice] = await db
+        .select()
+        .from(devices)
+        .where(eq(devices.deviceToken, token))
+        .limit(1);
+
+      if (matchedDevice) {
+        if (matchedDevice.status === 'revoked') {
+          return res.status(401).json({
+            error: 'Device token has been revoked',
+            code: 'INVALID_DEVICE_TOKEN',
+          });
+        }
+
+        const [tenant] = await db
+          .select()
+          .from(tenants)
+          .where(eq(tenants.id, matchedDevice.tenantId))
+          .limit(1);
+
+        if (!tenant || tenant.status === 'suspended') {
+          return res.status(403).json({
+            error: 'Tenant is suspended',
+            code: 'TENANT_SUSPENDED',
+          });
+        }
+
+        req.auth = {
+          role: 'device',
+          tenantId: matchedDevice.tenantId,
+          tenantName: tenant.companyName,
+          tenantStatus: tenant.status,
+          deviceId: matchedDevice.id,
+          deviceName: matchedDevice.deviceName,
+        };
+        return next();
+      }
+
+      // Try Firebase Token verification
+      try {
+        const decoded = await adminAuth.verifyIdToken(token);
+        const email = decoded.email || '';
+        const uid = decoded.uid;
+
+        // Check if Company Admin
+        const [compAdmin] = await db
+          .select()
+          .from(companyAdmins)
+          .where(eq(companyAdmins.email, email))
+          .limit(1);
+
+        if (compAdmin) {
+          req.auth = {
+            role: 'company_admin',
+            email,
+            uid,
+          };
+          return next();
+        }
+
+        // Check if Tenant Admin
+        const [tenAdmin] = await db
+          .select()
+          .from(tenantAdmins)
+          .where(eq(tenantAdmins.email, email))
+          .limit(1);
+
+        if (tenAdmin) {
+          const [tenant] = await db
+            .select()
+            .from(tenants)
+            .where(eq(tenants.id, tenAdmin.tenantId))
+            .limit(1);
+
+          if (!tenant || tenant.status === 'suspended') {
+            return res.status(403).json({
+              error: 'Tenant subscription is suspended',
+              code: 'TENANT_SUSPENDED',
+            });
+          }
+
+          req.auth = {
+            role: 'tenant_admin',
+            tenantId: tenAdmin.tenantId,
+            tenantName: tenant.companyName,
+            tenantStatus: tenant.status,
+            email,
+            uid,
+          };
+          return next();
+        }
+
+        // Fallback default for signed-in user if not explicitly mapped
+        req.auth = {
+          role: 'anonymous',
+          email,
+          uid,
+        };
+        return next();
+      } catch (err) {
+        console.warn('Firebase token verification failed or invalid token format:', err);
+        return res.status(401).json({
+          error: 'Unauthorized: Invalid Firebase token or Device Token',
+          code: 'UNAUTHORIZED',
+        });
+      }
+    }
+
+    // Default to anonymous if no headers provided
+    req.auth = {
+      role: 'anonymous',
+    };
+    return next();
+  } catch (error: any) {
+    console.error('Authentication middleware error:', error);
+    return res.status(500).json({
+      error: 'Authentication failed',
+      code: 'INTERNAL_ERROR',
+      details: error.message,
+    });
+  }
+}
+
+/**
+ * Enforce Company Admin role (Platform Superadmin)
+ */
+export function requireCompanyAdmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  if (!req.auth || req.auth.role !== 'company_admin') {
+    const errorRes: ErrorResponse = {
+      error: 'Forbidden: Requires company_admin privileges',
+      code: 'FORBIDDEN',
+    };
+    return res.status(403).json(errorRes);
+  }
+  next();
+}
+
+/**
+ * Enforce Tenant Admin or Company Admin
+ */
+export function requireTenantAdminOrCompany(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  if (!req.auth || (req.auth.role !== 'tenant_admin' && req.auth.role !== 'company_admin')) {
+    const errorRes: ErrorResponse = {
+      error: 'Forbidden: Requires tenant_admin or company_admin privileges',
+      code: 'FORBIDDEN',
+    };
+    return res.status(403).json(errorRes);
+  }
+  next();
+}
+
+/**
+ * Enforce Device or Tenant Admin access (e.g. for sync and embedding queries)
+ */
+export function requireDeviceOrTenantAdmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) {
+  if (
+    !req.auth ||
+    (req.auth.role !== 'device' && req.auth.role !== 'tenant_admin' && req.auth.role !== 'company_admin')
+  ) {
+    const errorRes: ErrorResponse = {
+      error: 'Unauthorized: Device token or tenant admin credentials required',
+      code: 'UNAUTHORIZED',
+    };
+    return res.status(401).json(errorRes);
+  }
+  next();
+}
+
+/**
+ * Helper to get the effective tenant ID for the request.
+ * - For tenant_admin and device: strictly returns req.auth.tenantId
+ * - For company_admin: can override via query or body param, otherwise defaults to 1
+ */
+export function resolveTenantId(req: AuthenticatedRequest): number | null {
+  if (!req.auth) return null;
+  if (req.auth.role === 'tenant_admin' || req.auth.role === 'device') {
+    return req.auth.tenantId ?? null;
+  }
+  if (req.auth.role === 'company_admin') {
+    const paramId = req.query.tenant_id || req.body.tenant_id || req.params.tenantId;
+    if (paramId) {
+      const parsed = parseInt(String(paramId), 10);
+      if (!isNaN(parsed)) return parsed;
+    }
+    return req.auth.tenantId ?? null; // Null means all tenants for company admin
+  }
+  return null;
+}

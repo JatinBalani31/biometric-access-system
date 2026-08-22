@@ -1,0 +1,75 @@
+mutation SeedDatabase @transaction {
+  user_insertMany(data: [
+    {
+      id: "550e8400-e29b-41d4-a716-446655440001",
+      email: "alice@example.com",
+      subscriptionStatus: "active",
+      createdAt_time: { now: true },
+      displayName: "Alice"
+    },
+    {
+      id: "550e8400-e29b-41d4-a716-446655440002",
+      email: "bob@example.com",
+      subscriptionStatus: "inactive",
+      createdAt_time: { now: true },
+      displayName: "Bob"
+    }
+  ])
+  device_insertMany(data: [
+    {
+      id: "770e8400-e29b-41d4-a716-446655440001",
+      userId: "550e8400-e29b-41d4-a716-446655440001",
+      deviceName: "Alice's iPhone",
+      publicKey: "pub_123",
+      lastUsedAt_time: { now: true }
+    },
+    {
+      id: "770e8400-e29b-41d4-a716-446655440002",
+      userId: "550e8400-e29b-41d4-a716-446655440002",
+      deviceName: "Bob's Laptop",
+      publicKey: "pub_456",
+      lastUsedAt_time: { now: true }
+    }
+  ])
+  partnerApp_insertMany(data: [
+    {
+      id: "990e8400-e29b-41d4-a716-446655440001",
+      appName: "VaultGuard",
+      apiKey: "key_abc",
+      callbackUrl: "https://vaultguard.com/callback"
+    },
+    {
+      id: "990e8400-e29b-41d4-a716-446655440002",
+      appName: "AuthSync",
+      apiKey: "key_def",
+      callbackUrl: "https://authsync.io/callback"
+    }
+  ])
+  authLog_insertMany(data: [
+    {
+      userId: "550e8400-e29b-41d4-a716-446655440001",
+      deviceId: "770e8400-e29b-41d4-a716-446655440001",
+      partnerAppId: "990e8400-e29b-41d4-a716-446655440001",
+      timestamp_time: { now: true },
+      status: "success",
+      ipAddress: "192.168.1.1"
+    }
+  ])
+  userSubscription_insertMany(data: [
+    {
+      userId: "550e8400-e29b-41d4-a716-446655440001",
+      planType: "premium",
+      startDate: "2023-01-01",
+      expiryDate: "2024-01-01",
+      status: "active"
+    }
+  ])
+  vaultItem_insertMany(data: [
+    {
+      userId: "550e8400-e29b-41d4-a716-446655440001",
+      title: "Secret Wifi Password",
+      encryptedContent: "base64encodedblob",
+      createdAt_time: { now: true }
+    }
+  ])
+}

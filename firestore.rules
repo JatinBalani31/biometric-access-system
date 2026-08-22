@@ -1,0 +1,48 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper function to check if request is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Helper to check if request is coming from specific tenant admin
+    function isTenantAdmin(tenantId) {
+      return isAuthenticated() && (
+        request.auth.token.role == 'company_admin' ||
+        (request.auth.token.role == 'tenant_admin' && request.auth.token.tenantId == tenantId)
+      );
+    }
+
+    // Helper to check if request is from verified kiosk device
+    function isAuthorizedDevice(tenantId) {
+      return isAuthenticated() && (
+        request.auth.token.role == 'company_admin' ||
+        (request.auth.token.role == 'device' && request.auth.token.tenantId == tenantId)
+      );
+    }
+
+    // 1. Face Embeddings Collection
+    // Format: tenant_{tenantId}_sub_{subscriberId}
+    match /face_embeddings/{docId} {
+      allow read: if isAuthenticated() && (
+        resource.data.tenantId == request.auth.token.tenantId ||
+        request.auth.token.role == 'company_admin'
+      );
+      allow write: if isTenantAdmin(request.resource.data.tenantId);
+    }
+
+    // 2. Sync Status Collection
+    match /sync_status/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
+    }
+
+    // 3. Device Sync Telemetry Logs
+    match /device_sync_logs/{logId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthorizedDevice(request.resource.data.tenantId);
+    }
+  }
+}

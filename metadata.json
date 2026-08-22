@@ -1,0 +1,6 @@
+{
+  "name": "B2B Subscription Management API",
+  "description": "Multi-tenant B2B subscription and device management API with Cloud SQL and Firebase integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

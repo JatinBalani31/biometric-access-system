@@ -1,0 +1,84 @@
+mutation UserOperations($email: String!, $subscriptionStatus: String!) @auth(level: USER) {
+  user_insert(data: {id_expr: "auth.uid", email: $email, subscriptionStatus: $subscriptionStatus, createdAt_expr: "request.time"})
+  user_update(key: {id_expr: "auth.uid"}, data: {subscriptionStatus: $subscriptionStatus})
+  user_delete(key: {id_expr: "auth.uid"})
+}
+
+query UserRead @auth(level: USER) {
+  user(key: {id_expr: "auth.uid"}) {
+    email
+    subscriptionStatus
+  }
+  users(limit: 10) {
+    email
+  }
+}
+
+mutation SubscriptionOperations($planType: String!, $startDate: Date!, $expiryDate: Date!, $status: String!) @auth(level: USER) {
+  userSubscription_insert(data: {user: {id_expr: "auth.uid"}, planType: $planType, startDate: $startDate, expiryDate: $expiryDate, status: $status})
+  userSubscription_update(key: {id_expr: "auth.uid"}, data: {status: "CANCELLED"})
+  userSubscription_delete(key: {id_expr: "auth.uid"})
+}
+
+query SubscriptionRead @auth(level: USER) {
+  userSubscription(key: {id_expr: "auth.uid"}) {
+    planType
+    status
+  }
+  userSubscriptions(where: {userId: {eq_expr: "auth.uid"}}) {
+    planType
+  }
+}
+
+mutation DeviceOperations($deviceName: String!, $publicKey: String!) @auth(level: USER) {
+  device_insert(data: {user: {id_expr: "auth.uid"}, deviceName: $deviceName, publicKey: $publicKey, lastUsedAt_expr: "request.time"})
+  device_update(key: {id_expr: "auth.uid"}, data: {lastUsedAt_expr: "request.time"})
+  device_delete(key: {id_expr: "auth.uid"})
+}
+
+query DeviceRead @auth(level: USER) {
+  device(key: {id_expr: "auth.uid"}) {
+    deviceName
+  }
+  devices(where: {userId: {eq_expr: "auth.uid"}}) {
+    deviceName
+  }
+}
+
+mutation VaultOperations($title: String!, $encryptedContent: String!) @auth(level: USER) {
+  vaultItem_insert(data: {user: {id_expr: "auth.uid"}, title: $title, encryptedContent: $encryptedContent, createdAt_expr: "request.time"})
+  vaultItem_update(key: {id_expr: "auth.uid"}, data: {title: $title})
+  vaultItem_delete(key: {id_expr: "auth.uid"})
+}
+
+query VaultRead @auth(level: USER) {
+  vaultItem(key: {id_expr: "auth.uid"}) {
+    title
+  }
+  vaultItems(where: {userId: {eq_expr: "auth.uid"}}) {
+    title
+  }
+}
+
+mutation LogOperations($status: String!, $ipAddress: String!, $appId: UUID!, $deviceId: UUID!) @auth(level: USER) {
+  authLog_insert(data: {user: {id_expr: "auth.uid"}, status: $status, ipAddress: $ipAddress, partnerAppId: $appId, deviceId: $deviceId, timestamp_expr: "request.time"})
+  authLog_update(key: {id_expr: "auth.uid"}, data: {status: "REVIEWED"})
+  authLog_delete(key: {id_expr: "auth.uid"})
+}
+
+query LogRead @auth(level: USER) {
+  authLog(key: {id_expr: "auth.uid"}) {
+    status
+  }
+  authLogs(where: {userId: {eq_expr: "auth.uid"}}) {
+    timestamp
+    status
+  }
+}
+
+query PartnerAppsPublic @auth(level: PUBLIC, insecureReason: "Publicly visible directory of registered partner applications.") {
+  partnerApps(limit: 50) {
+    appName
+    organizationName
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "108273645129",
+    "project_id": "b2b-sub-mgmt-api",
+    "storage_bucket": "b2b-sub-mgmt-api.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:108273645129:android:a9e3f52b4129bc789012",
+        "android_client_info": {
+          "package_name": "com.biometric.kiosk"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD-MockFirebaseApiKey_PlatformB2B2026_Key"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
