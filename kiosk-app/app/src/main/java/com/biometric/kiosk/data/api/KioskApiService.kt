@@ -35,4 +35,24 @@ interface KioskApiService {
         @Header("x-device-token") token: String,
         @Body body: VerifyAccessRequest
     ): AccessResult
+
+    /**
+     * Enroll on-device face embedding directly to server.
+     * POST /api/kiosk/enroll-face
+     */
+    @POST("api/kiosk/enroll-face")
+    suspend fun enrollFace(
+        @Header("x-device-token") token: String,
+        @Body body: EnrollFaceRequest
+    ): EnrollFaceResponse
+
+    /**
+     * Exchange a short-lived pairing code (generated in the admin panel) for this
+     * device's permanent token. No device token required — the code itself is the
+     * one-time credential for this single exchange.
+     * POST /api/devices/pair
+     */
+    @POST("api/devices/pair")
+    suspend fun pairDevice(@Body body: PairRequest): PairResponse
 }
+

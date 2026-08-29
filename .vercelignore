@@ -1,0 +1,41 @@
+# Android Kiosk App
+kiosk-app/
+
+# Firebase Data Connect backend schema & tools (managed separately)
+dataconnect/
+.dataconnect/
+.firebase/
+
+# AI Agent Workspaces & IDE configurations
+.agents/
+.claude/
+.idea/
+.vscode/
+
+# Local build artifacts & caches
+dist/
+dist-ssr/
+build/
+node_modules/
+.gradle/
+**/.gradle/
+**/build/
+*.hprof
+**/*.hprof
+
+# Documentation & setup scripts not needed at runtime
+scripts/
+FACE_RECOGNITION.md
+Dockerfile
+.dockerignore
+
+# Environment files (Vercel uses Project Environment Variables in Dashboard)
+.env*
+!.env.example
+*service-account*.json
+*serviceAccountKey*.json
+
+# Git & OS metadata
+.git/
+.DS_Store
+Thumbs.db

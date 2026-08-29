@@ -92,10 +92,9 @@ class AccessResultFragment : Fragment() {
             binding.tvSubscriberName.visibility = View.VISIBLE
             binding.tvPlanInfo.text = "📋 $plan"
             binding.tvPlanInfo.visibility = View.VISIBLE
-            binding.tvDaysLeft.text = "⏱ $daysLeft days remaining"
+            binding.tvDaysLeft.text = if (daysLeft > 0) "⏱ $daysLeft days remaining" else "⏱ Active today"
             binding.tvDaysLeft.visibility = View.VISIBLE
             binding.tvStatusBadge.text = "● ACTIVE"
-            binding.tvStatusBadge.setTextColor(requireContext().getColor(R.color.color_active))
             binding.tvStatusBadge.visibility = View.VISIBLE
             binding.tvMessage.text = "Welcome! Enjoy your session."
             binding.tvMessage.visibility = View.VISIBLE
@@ -117,7 +116,6 @@ class AccessResultFragment : Fragment() {
             binding.tvDaysLeft.text = "Plan expired — please renew at the front desk"
             binding.tvDaysLeft.visibility = View.VISIBLE
             binding.tvStatusBadge.text = "● EXPIRED"
-            binding.tvStatusBadge.setTextColor(requireContext().getColor(R.color.color_expired))
             binding.tvStatusBadge.visibility = View.VISIBLE
             binding.tvMessage.visibility = View.GONE
 

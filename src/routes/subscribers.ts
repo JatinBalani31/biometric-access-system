@@ -1,11 +1,9 @@
 import { Router, Response } from 'express';
-import { db } from '../db/index.ts';
-import { subscribers, tenants, subscriptionPlans } from '../db/schema.ts';
-import { eq, and, sql, desc, ilike, or } from 'drizzle-orm';
+import { collections, createDoc, getDoc, listDocs } from '../db/firestore.ts';
+import { Subscriber, NewSubscriber, SubscriptionPlan, Tenant } from '../db/models.ts';
 import { AuthenticatedRequest, requireTenantAdminOrCompany, resolveTenantId } from '../middleware/auth.ts';
-import { saveFaceEmbedding, getFaceEmbedding, revokeFaceEmbedding } from '../lib/firestore-sync.ts';
-import { ErrorResponse, FaceEmbeddingRecord } from '../types/api.ts';
-import { memoryStore } from '../lib/memory-store.ts';
+import { saveFaceEmbedding, getFaceEmbedding } from '../lib/firestore-sync.ts';
+import { ErrorResponse, FaceEmbeddingRecord, CreateSubscriberRequest } from '../types/api.ts';
 
 export const subscribersRouter = Router();
 
@@ -40,62 +38,39 @@ subscribersRouter.get('/', requireTenantAdminOrCompany, async (req: Authenticate
     const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 50));
     const offset = (pageNum - 1) * limitNum;
 
-    try {
-      let query = db
-        .select({
-          subscriber: subscribers,
-          planName: subscriptionPlans.name,
-          planDuration: subscriptionPlans.durationDays,
-          planPrice: subscriptionPlans.price,
-        })
-        .from(subscribers)
-        .leftJoin(subscriptionPlans, eq(subscribers.planId, subscriptionPlans.id));
+    const where: [string, FirebaseFirestore.WhereFilterOp, any][] = [];
+    if (tenantId) where.push(['tenantId', '==', tenantId]);
+    if (status && typeof status === 'string') where.push(['status', '==', status]);
 
-      const conditions: any[] = [];
-      if (tenantId) conditions.push(eq(subscribers.tenantId, tenantId));
-      if (status && typeof status === 'string') conditions.push(eq(subscribers.status, status));
+    const allSubscribers = await listDocs<Subscriber>(collections.subscribers, where.length ? where : undefined);
+    allSubscribers.sort((a, b) => b.id - a.id);
+    const pageSubscribers = allSubscribers.slice(offset, offset + limitNum);
 
-      let fullQuery = query;
-      if (conditions.length > 0) fullQuery = query.where(and(...conditions)) as any;
-
-      const rows = await fullQuery.orderBy(desc(subscribers.id)).limit(limitNum).offset(offset);
-
-      const enriched = rows.map((r) => {
-        const { daysLeft, isExpired } = computeSubscriberDaysLeft(r.subscriber.endDate);
-        return {
-          ...r.subscriber,
-          planName: r.planName || 'Unassigned',
-          planDuration: r.planDuration,
-          planPrice: r.planPrice,
-          daysLeft,
-          isExpired,
-        };
-      });
-
-      return res.json({
-        data: enriched,
-        pagination: { page: pageNum, limit: limitNum, total: enriched.length, totalPages: 1 },
-      });
-    } catch (dbErr) {
-      let filtered = memoryStore.subscribers.filter((s) => !tenantId || s.tenantId === tenantId);
-      const enriched = filtered.map((s) => {
-        const plan = memoryStore.subscriptionPlans.find((p) => p.id === s.planId);
-        const { daysLeft, isExpired } = computeSubscriberDaysLeft(s.endDate);
-        return {
-          ...s,
-          planName: plan?.name || 'Standard Plan',
-          planDuration: plan?.durationDays || 30,
-          planPrice: plan?.price || '49.00',
-          daysLeft,
-          isExpired,
-        };
-      });
-
-      return res.json({
-        data: enriched,
-        pagination: { page: pageNum, limit: limitNum, total: enriched.length, totalPages: 1 },
+    const planCache = new Map<number, SubscriptionPlan | null>();
+    const enriched: Array<Subscriber & { planName: string; planDuration?: number; planPrice?: string; daysLeft: number; isExpired: boolean }> = [];
+    for (const sub of pageSubscribers) {
+      let plan: SubscriptionPlan | null = null;
+      if (sub.planId != null) {
+        if (!planCache.has(sub.planId)) {
+          planCache.set(sub.planId, await getDoc<SubscriptionPlan>(collections.subscriptionPlans, sub.planId));
+        }
+        plan = planCache.get(sub.planId) ?? null;
+      }
+      const { daysLeft, isExpired } = computeSubscriberDaysLeft(sub.endDate);
+      enriched.push({
+        ...sub,
+        planName: plan?.name || 'Unassigned',
+        planDuration: plan?.durationDays,
+        planPrice: plan?.price,
+        daysLeft,
+        isExpired,
       });
     }
+
+    return res.json({
+      data: enriched,
+      pagination: { page: pageNum, limit: limitNum, total: enriched.length, totalPages: 1 },
+    });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to fetch subscribers', code: 'INTERNAL_ERROR', details: error.message });
   }
@@ -107,30 +82,8 @@ subscribersRouter.get('/:id/days-left', requireTenantAdminOrCompany, async (req:
     const subscriberId = parseInt(req.params.id, 10);
     const tenantId = resolveTenantId(req);
 
-    let sub: any;
-    let plan: any;
-
-    try {
-      const [dbSub] = await db
-        .select({
-          subscriber: subscribers,
-          plan: subscriptionPlans,
-        })
-        .from(subscribers)
-        .leftJoin(subscriptionPlans, eq(subscribers.planId, subscriptionPlans.id))
-        .where(eq(subscribers.id, subscriberId))
-        .limit(1);
-
-      if (dbSub) {
-        sub = dbSub.subscriber;
-        plan = dbSub.plan;
-      }
-    } catch (dbErr) {
-      sub = memoryStore.subscribers.find((s) => s.id === subscriberId);
-      if (sub) {
-        plan = memoryStore.subscriptionPlans.find((p) => p.id === sub.planId);
-      }
-    }
+    const sub = await getDoc<Subscriber>(collections.subscribers, subscriberId);
+    const plan = sub && sub.planId != null ? await getDoc<SubscriptionPlan>(collections.subscriptionPlans, sub.planId) : null;
 
     if (!sub) {
       return res.status(404).json({ error: 'Subscriber not found', code: 'NOT_FOUND' });
@@ -176,19 +129,11 @@ subscribersRouter.post('/', requireTenantAdminOrCompany, async (req: Authenticat
       return res.status(400).json({ error: 'tenant_id is required', code: 'BAD_REQUEST' });
     }
 
-    let tenant: any;
+    const tenant = await getDoc<Tenant>(collections.tenants, tenantId);
     let currentCount = 0;
-
-    try {
-      const [t] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
-      tenant = t;
-      if (tenant) {
-        const [c] = await db.select({ count: sql<number>`count(*)::int` }).from(subscribers).where(eq(subscribers.tenantId, tenantId));
-        currentCount = c?.count || 0;
-      }
-    } catch (dbErr) {
-      tenant = memoryStore.tenants.find((t) => t.id === tenantId);
-      currentCount = memoryStore.subscribers.filter((s) => s.tenantId === tenantId).length;
+    if (tenant) {
+      const existing = await listDocs<Subscriber>(collections.subscribers, [['tenantId', '==', tenantId]]);
+      currentCount = existing.length;
     }
 
     if (!tenant) {
@@ -210,50 +155,34 @@ subscribersRouter.post('/', requireTenantAdminOrCompany, async (req: Authenticat
       return res.status(422).json(errorRes);
     }
 
-    const { name, phone, email, plan_id, start_date, end_date, duration_days, generate_embedding = true } = req.body;
+    const { name, phone, email, plan_id, start_date, end_date, duration_days, face_vector } = req.body as CreateSubscriberRequest & { start_date?: string, end_date?: string };
     if (!name) {
       return res.status(400).json({ error: 'Subscriber name is required', code: 'BAD_REQUEST' });
     }
 
     const start = start_date ? new Date(start_date) : new Date();
-    const end = end_date ? new Date(end_date) : new Date(start.getTime() + (parseInt(duration_days, 10) || 30) * 24 * 60 * 60 * 1000);
+    const end = end_date ? new Date(end_date) : new Date(start.getTime() + (duration_days || 30) * 24 * 60 * 60 * 1000);
 
-    let newSubscriber: any;
-    try {
-      const [inserted] = await db.insert(subscribers).values({
-        tenantId,
-        name,
-        phone: phone || null,
-        email: email || null,
-        planId: plan_id ? parseInt(plan_id, 10) : null,
-        startDate: start,
-        endDate: end,
-        status: 'active',
-      }).returning();
-      newSubscriber = inserted;
-    } catch (dbErr) {
-      newSubscriber = {
-        id: memoryStore.subscribers.length + 1,
-        tenantId,
-        name,
-        phone: phone || null,
-        email: email || null,
-        planId: plan_id ? parseInt(plan_id, 10) : null,
-        startDate: start,
-        endDate: end,
-        status: 'active',
-        createdAt: new Date(),
-      };
-      memoryStore.subscribers.push(newSubscriber);
-    }
+    const newSubscriber = await createDoc<Subscriber>(collections.subscribers, {
+      tenantId,
+      name,
+      phone: phone || null,
+      email: email || null,
+      planId: plan_id ? (plan_id as any) : null,
+      startDate: start.toISOString(),
+      endDate: end.toISOString(),
+      status: 'active',
+      createdAt: new Date().toISOString(),
+    } as NewSubscriber);
 
     let embeddingRecord: FaceEmbeddingRecord | null = null;
-    if (generate_embedding) {
+    if (face_vector && Array.isArray(face_vector)) {
       embeddingRecord = await saveFaceEmbedding({
         tenantId,
         subscriberId: newSubscriber.id,
         subscriberName: newSubscriber.name,
         email: newSubscriber.email || '',
+        vector: face_vector,
         status: 'active',
       });
     }
@@ -280,7 +209,7 @@ subscribersRouter.post('/', requireTenantAdminOrCompany, async (req: Authenticat
 subscribersRouter.get('/:id', requireTenantAdminOrCompany, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const subscriberId = parseInt(req.params.id, 10);
-    const sub = memoryStore.subscribers.find((s) => s.id === subscriberId);
+    const sub = await getDoc<Subscriber>(collections.subscribers, subscriberId);
     if (!sub) return res.status(404).json({ error: 'Subscriber not found', code: 'NOT_FOUND' });
     const { daysLeft, isExpired } = computeSubscriberDaysLeft(sub.endDate);
     const embedding = await getFaceEmbedding(sub.tenantId, sub.id);

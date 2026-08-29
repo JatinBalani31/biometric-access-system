@@ -1,15 +1,13 @@
 import { Router, Response } from 'express';
-import { db } from '../db/index.ts';
-import { tenants, tenantAdmins, subscribers, devices, subscriptionPlans, auditLogs } from '../db/schema.ts';
-import { eq, sql, desc, and } from 'drizzle-orm';
+import { createDoc, getDoc, updateDoc, listDocs, collections } from '../db/firestore.ts';
+import { Tenant, TenantAdmin, Subscriber, Device, SubscriptionPlan, AuditLog } from '../db/models.ts';
 import { AuthenticatedRequest, requireCompanyAdmin, requireTenantAdminOrCompany } from '../middleware/auth.ts';
-import { memoryStore } from '../lib/memory-store.ts';
 import { logAuditAction } from '../lib/audit-logger.ts';
 
 export const tenantsRouter = Router();
 
 // Helper to determine device sync health
-function computeSyncHealth(lastSyncedAt: Date | string | null): { health: 'healthy' | 'warning' | 'stale' | 'never'; label: string } {
+function computeSyncHealth(lastSyncedAt?: Date | string | null): { health: 'healthy' | 'warning' | 'stale' | 'never'; label: string } {
   if (!lastSyncedAt) {
     return { health: 'never', label: 'Never Synced' };
   }
@@ -27,125 +25,49 @@ function computeSyncHealth(lastSyncedAt: Date | string | null): { health: 'healt
   }
 }
 
+function latestSync(devs: Device[]): Date | null {
+  let lastSync: Date | null = null;
+  devs.forEach((d) => {
+    if (d.lastSyncedAt && (!lastSync || new Date(d.lastSyncedAt) > lastSync)) {
+      lastSync = new Date(d.lastSyncedAt);
+    }
+  });
+  return lastSync;
+}
+
+async function enrichTenant(t: Tenant) {
+  const [subs, devs] = await Promise.all([
+    listDocs<Subscriber>(collections.subscribers, [['tenantId', '==', t.id]]),
+    listDocs<Device>(collections.devices, [['tenantId', '==', t.id]]),
+  ]);
+  const lastSync = latestSync(devs);
+  return {
+    ...t,
+    currentSubscribers: subs.length,
+    currentDevices: devs.length,
+    lastDeviceSync: lastSync ? lastSync.toISOString() : null,
+    syncHealth: computeSyncHealth(lastSync),
+  };
+}
+
 // GET /api/tenants - List tenants (Company Admin: all, Tenant Admin: own tenant)
 tenantsRouter.get('/', requireTenantAdminOrCompany, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const auth = req.auth!;
 
-    try {
-      if (auth.role === 'tenant_admin') {
-        const [tenant] = await db
-          .select()
-          .from(tenants)
-          .where(eq(tenants.id, auth.tenantId!))
-          .limit(1);
-
-        if (!tenant) {
-          return res.status(404).json({ error: 'Tenant not found', code: 'NOT_FOUND' });
-        }
-
-        const [subCount] = await db
-          .select({ count: sql<number>`count(*)::int` })
-          .from(subscribers)
-          .where(eq(subscribers.tenantId, tenant.id));
-
-        const tenantDevices = await db
-          .select()
-          .from(devices)
-          .where(eq(devices.tenantId, tenant.id));
-
-        let lastSync: Date | null = null;
-        tenantDevices.forEach((d) => {
-          if (d.lastSyncedAt && (!lastSync || new Date(d.lastSyncedAt) > new Date(lastSync))) {
-            lastSync = new Date(d.lastSyncedAt);
-          }
-        });
-
-        return res.json([
-          {
-            ...tenant,
-            currentSubscribers: subCount?.count || 0,
-            currentDevices: tenantDevices.length,
-            lastDeviceSync: lastSync ? (lastSync as Date).toISOString() : null,
-            syncHealth: computeSyncHealth(lastSync),
-          },
-        ]);
+    if (auth.role === 'tenant_admin') {
+      const tenant = await getDoc<Tenant>(collections.tenants, auth.tenantId!);
+      if (!tenant) {
+        return res.status(404).json({ error: 'Tenant not found', code: 'NOT_FOUND' });
       }
-
-      // Company Admin: return all enriched tenants
-      const allTenants = await db.select().from(tenants).orderBy(tenants.id);
-      const enriched = await Promise.all(
-        allTenants.map(async (t) => {
-          const [subCount] = await db
-            .select({ count: sql<number>`count(*)::int` })
-            .from(subscribers)
-            .where(eq(subscribers.tenantId, t.id));
-
-          const tenantDevices = await db
-            .select()
-            .from(devices)
-            .where(eq(devices.tenantId, t.id));
-
-          let lastSync: Date | null = null;
-          tenantDevices.forEach((d) => {
-            if (d.lastSyncedAt && (!lastSync || new Date(d.lastSyncedAt) > new Date(lastSync))) {
-              lastSync = new Date(d.lastSyncedAt);
-            }
-          });
-
-          return {
-            ...t,
-            currentSubscribers: subCount?.count || 0,
-            currentDevices: tenantDevices.length,
-            lastDeviceSync: lastSync ? (lastSync as Date).toISOString() : null,
-            syncHealth: computeSyncHealth(lastSync),
-          };
-        })
-      );
-      return res.json(enriched);
-    } catch (dbErr) {
-      // Memory store fallback
-      if (auth.role === 'tenant_admin') {
-        const tenant = memoryStore.tenants.find((t) => t.id === auth.tenantId);
-        if (!tenant) return res.status(404).json({ error: 'Tenant not found', code: 'NOT_FOUND' });
-        const subCount = memoryStore.subscribers.filter((s) => s.tenantId === tenant.id).length;
-        const tenantDevices = memoryStore.devices.filter((d) => d.tenantId === tenant.id);
-        let lastSync: any = null;
-        tenantDevices.forEach((d) => {
-          if (d.lastSyncedAt && (!lastSync || new Date(d.lastSyncedAt) > new Date(lastSync))) {
-            lastSync = d.lastSyncedAt;
-          }
-        });
-        return res.json([
-          {
-            ...tenant,
-            currentSubscribers: subCount,
-            currentDevices: tenantDevices.length,
-            lastDeviceSync: lastSync ? new Date(lastSync).toISOString() : null,
-            syncHealth: computeSyncHealth(lastSync),
-          },
-        ]);
-      }
-
-      const enriched = memoryStore.tenants.map((t) => {
-        const subCount = memoryStore.subscribers.filter((s) => s.tenantId === t.id).length;
-        const tenantDevices = memoryStore.devices.filter((d) => d.tenantId === t.id);
-        let lastSync: any = null;
-        tenantDevices.forEach((d) => {
-          if (d.lastSyncedAt && (!lastSync || new Date(d.lastSyncedAt) > new Date(lastSync))) {
-            lastSync = d.lastSyncedAt;
-          }
-        });
-        return {
-          ...t,
-          currentSubscribers: subCount,
-          currentDevices: tenantDevices.length,
-          lastDeviceSync: lastSync ? new Date(lastSync).toISOString() : null,
-          syncHealth: computeSyncHealth(lastSync),
-        };
-      });
-      return res.json(enriched);
+      return res.json([await enrichTenant(tenant)]);
     }
+
+    // Company Admin: return all enriched tenants
+    const allTenants = await listDocs<Tenant>(collections.tenants);
+    allTenants.sort((a, b) => a.id - b.id);
+    const enriched = await Promise.all(allTenants.map(enrichTenant));
+    return res.json(enriched);
   } catch (error: any) {
     console.error('Error fetching tenants:', error);
     res.status(500).json({ error: 'Failed to fetch tenants', code: 'INTERNAL_ERROR', details: error.message });
@@ -165,138 +87,46 @@ tenantsRouter.get('/:id', requireTenantAdminOrCompany, async (req: Authenticated
       return res.status(403).json({ error: 'Access denied to this tenant', code: 'FORBIDDEN' });
     }
 
-    try {
-      const [tenant] = await db
-        .select()
-        .from(tenants)
-        .where(eq(tenants.id, tenantId))
-        .limit(1);
-
-      if (!tenant) {
-        return res.status(404).json({ error: 'Tenant not found', code: 'NOT_FOUND' });
-      }
-
-      // Fetch subscribers with plan names
-      const tenantSubs = await db
-        .select({
-          id: subscribers.id,
-          tenantId: subscribers.tenantId,
-          name: subscribers.name,
-          email: subscribers.email,
-          phone: subscribers.phone,
-          planId: subscribers.planId,
-          planName: subscriptionPlans.name,
-          startDate: subscribers.startDate,
-          endDate: subscribers.endDate,
-          status: subscribers.status,
-          createdAt: subscribers.createdAt,
-        })
-        .from(subscribers)
-        .leftJoin(subscriptionPlans, eq(subscribers.planId, subscriptionPlans.id))
-        .where(eq(subscribers.tenantId, tenantId))
-        .orderBy(desc(subscribers.createdAt));
-
-      // Fetch devices with health
-      const tenantDevs = await db
-        .select()
-        .from(devices)
-        .where(eq(devices.tenantId, tenantId))
-        .orderBy(desc(devices.createdAt));
-
-      const enrichedDevs = tenantDevs.map((d) => ({
-        ...d,
-        syncHealth: computeSyncHealth(d.lastSyncedAt),
-      }));
-
-      // Fetch tenant admins
-      const admins = await db
-        .select()
-        .from(tenantAdmins)
-        .where(eq(tenantAdmins.tenantId, tenantId));
-
-      // Fetch tenant plans
-      const plans = await db
-        .select()
-        .from(subscriptionPlans)
-        .where(eq(subscriptionPlans.tenantId, tenantId));
-
-      // Fetch recent audit logs for this tenant
-      let recentAudits: any[] = [];
-      try {
-        recentAudits = await db
-          .select()
-          .from(auditLogs)
-          .where(eq(auditLogs.tenantId, tenantId))
-          .orderBy(desc(auditLogs.createdAt))
-          .limit(20);
-      } catch (auditErr) {
-        recentAudits = (memoryStore.auditLogs || []).filter((a) => a.tenantId === tenantId);
-      }
-
-      let lastSync: Date | null = null;
-      tenantDevs.forEach((d) => {
-        if (d.lastSyncedAt && (!lastSync || new Date(d.lastSyncedAt) > new Date(lastSync))) {
-          lastSync = new Date(d.lastSyncedAt);
-        }
-      });
-
-      return res.json({
-        ...tenant,
-        currentSubscribers: tenantSubs.length,
-        currentDevices: tenantDevs.length,
-        lastDeviceSync: lastSync ? (lastSync as Date).toISOString() : null,
-        syncHealth: computeSyncHealth(lastSync),
-        subscribers: tenantSubs,
-        devices: enrichedDevs,
-        admins,
-        plans,
-        auditLogs: recentAudits,
-      });
-    } catch (dbErr) {
-      const tenant = memoryStore.tenants.find((t) => t.id === tenantId);
-      if (!tenant) return res.status(404).json({ error: 'Tenant not found', code: 'NOT_FOUND' });
-
-      const tenantSubs = memoryStore.subscribers
-        .filter((s) => s.tenantId === tenantId)
-        .map((s) => {
-          const plan = memoryStore.subscriptionPlans.find((p) => p.id === s.planId);
-          return {
-            ...s,
-            planName: plan?.name || 'Standard Membership',
-          };
-        });
-
-      const tenantDevs = memoryStore.devices
-        .filter((d) => d.tenantId === tenantId)
-        .map((d) => ({
-          ...d,
-          syncHealth: computeSyncHealth(d.lastSyncedAt),
-        }));
-
-      const admins = memoryStore.tenantAdmins.filter((a) => a.tenantId === tenantId);
-      const plans = memoryStore.subscriptionPlans.filter((p) => p.tenantId === tenantId);
-      const recentAudits = (memoryStore.auditLogs || []).filter((a) => a.tenantId === tenantId);
-
-      let lastSync: any = null;
-      tenantDevs.forEach((d) => {
-        if (d.lastSyncedAt && (!lastSync || new Date(d.lastSyncedAt) > new Date(lastSync))) {
-          lastSync = d.lastSyncedAt;
-        }
-      });
-
-      return res.json({
-        ...tenant,
-        currentSubscribers: tenantSubs.length,
-        currentDevices: tenantDevs.length,
-        lastDeviceSync: lastSync ? new Date(lastSync).toISOString() : null,
-        syncHealth: computeSyncHealth(lastSync),
-        subscribers: tenantSubs,
-        devices: tenantDevs,
-        admins,
-        plans,
-        auditLogs: recentAudits,
-      });
+    const tenant = await getDoc<Tenant>(collections.tenants, tenantId);
+    if (!tenant) {
+      return res.status(404).json({ error: 'Tenant not found', code: 'NOT_FOUND' });
     }
+
+    const [rawSubs, rawDevs, admins, plans, rawAudits] = await Promise.all([
+      listDocs<Subscriber>(collections.subscribers, [['tenantId', '==', tenantId]]),
+      listDocs<Device>(collections.devices, [['tenantId', '==', tenantId]]),
+      listDocs<TenantAdmin>(collections.tenantAdmins, [['tenantId', '==', tenantId]]),
+      listDocs<SubscriptionPlan>(collections.subscriptionPlans, [['tenantId', '==', tenantId]]),
+      listDocs<AuditLog>(collections.auditLogs, [['tenantId', '==', tenantId]]),
+    ]);
+
+    const planById = new Map(plans.map((p) => [p.id, p.name]));
+    const tenantSubs = rawSubs
+      .map((s) => ({ ...s, planName: s.planId ? planById.get(s.planId) : undefined }))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    const tenantDevs = rawDevs
+      .map((d) => ({ ...d, syncHealth: computeSyncHealth(d.lastSyncedAt) }))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    const recentAudits = rawAudits
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 20);
+
+    const lastSync = latestSync(rawDevs);
+
+    return res.json({
+      ...tenant,
+      currentSubscribers: tenantSubs.length,
+      currentDevices: tenantDevs.length,
+      lastDeviceSync: lastSync ? lastSync.toISOString() : null,
+      syncHealth: computeSyncHealth(lastSync),
+      subscribers: tenantSubs,
+      devices: tenantDevs,
+      admins,
+      plans,
+      auditLogs: recentAudits,
+    });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to fetch tenant', code: 'INTERNAL_ERROR', details: error.message });
   }
@@ -323,67 +153,40 @@ tenantsRouter.post('/', requireCompanyAdmin, async (req: AuthenticatedRequest, r
     const inviteToken = `inv_${Math.random().toString(36).substring(2, 10)}_${Date.now().toString(36)}`;
     const inviteUrl = `https://platform.io/invite/tenant?token=${inviteToken}&email=${encodeURIComponent(assignedAdminEmail)}`;
 
-    let newTenant: any;
-    let initialAdmin: any;
+    const newTenant = await createDoc<Tenant>(collections.tenants, {
+      companyName: company_name,
+      contactEmail: contact_email,
+      planTier: plan_tier,
+      subscriberLimit: parseInt(String(subscriber_limit), 10) || 100,
+      status,
+      createdAt: new Date().toISOString(),
+    });
 
-    try {
-      const [insertedTenant] = await db
-        .insert(tenants)
-        .values({
-          companyName: company_name,
-          contactEmail: contact_email,
-          planTier: plan_tier,
-          subscriberLimit: parseInt(String(subscriber_limit), 10) || 100,
-          status: status,
-        })
-        .returning();
+    const initialAdmin = await createDoc<TenantAdmin>(collections.tenantAdmins, {
+      tenantId: newTenant.id,
+      email: assignedAdminEmail,
+      role: 'admin',
+      uid: null,
+      createdAt: new Date().toISOString(),
+    });
 
-      newTenant = insertedTenant;
-
-      // Auto-generate initial tenant admin
-      const [insertedAdmin] = await db
-        .insert(tenantAdmins)
-        .values({
-          tenantId: newTenant.id,
-          email: assignedAdminEmail,
-          role: 'admin',
-        })
-        .returning();
-
-      initialAdmin = insertedAdmin;
-
-      // Create default subscription plans for this tenant
-      await db.insert(subscriptionPlans).values([
-        { tenantId: newTenant.id, name: 'Standard Monthly Pass', durationDays: 30, price: '49.00' },
-        { tenantId: newTenant.id, name: 'Annual VIP Pass', durationDays: 365, price: '399.00' },
-      ]);
-    } catch (dbErr) {
-      // Memory Store fallback
-      newTenant = {
-        id: memoryStore.tenants.length + 1,
-        companyName: company_name,
-        contactEmail: contact_email,
-        planTier: plan_tier,
-        subscriberLimit: parseInt(String(subscriber_limit), 10) || 100,
-        status: status,
-        createdAt: new Date(),
-      };
-      memoryStore.tenants.push(newTenant);
-
-      initialAdmin = {
-        id: memoryStore.tenantAdmins.length + 1,
+    // Create default subscription plans for this tenant
+    await Promise.all([
+      createDoc<SubscriptionPlan>(collections.subscriptionPlans, {
         tenantId: newTenant.id,
-        email: assignedAdminEmail,
-        role: 'admin',
-        createdAt: new Date(),
-      };
-      memoryStore.tenantAdmins.push(initialAdmin);
-
-      memoryStore.subscriptionPlans.push(
-        { id: memoryStore.subscriptionPlans.length + 1, tenantId: newTenant.id, name: 'Standard Monthly Pass', durationDays: 30, price: '49.00', createdAt: new Date() },
-        { id: memoryStore.subscriptionPlans.length + 2, tenantId: newTenant.id, name: 'Annual VIP Pass', durationDays: 365, price: '399.00', createdAt: new Date() }
-      );
-    }
+        name: 'Standard Monthly Pass',
+        durationDays: 30,
+        price: '49.00',
+        createdAt: new Date().toISOString(),
+      }),
+      createDoc<SubscriptionPlan>(collections.subscriptionPlans, {
+        tenantId: newTenant.id,
+        name: 'Annual VIP Pass',
+        durationDays: 365,
+        price: '399.00',
+        createdAt: new Date().toISOString(),
+      }),
+    ]);
 
     // Log Audit Action
     await logAuditAction({
@@ -439,14 +242,7 @@ tenantsRouter.patch('/:id', requireCompanyAdmin, async (req: AuthenticatedReques
       });
     }
 
-    let existingTenant: any;
-    try {
-      const [found] = await db.select().from(tenants).where(eq(tenants.id, tenantId)).limit(1);
-      existingTenant = found;
-    } catch (err) {
-      existingTenant = memoryStore.tenants.find((t) => t.id === tenantId);
-    }
-
+    const existingTenant = await getDoc<Tenant>(collections.tenants, tenantId);
     if (!existingTenant) {
       return res.status(404).json({ error: 'Tenant not found', code: 'NOT_FOUND' });
     }
@@ -479,21 +275,8 @@ tenantsRouter.patch('/:id', requireCompanyAdmin, async (req: AuthenticatedReques
       auditAction = 'TENANT_STATUS_UPDATED';
     }
 
-    let updatedTenant: any;
-    try {
-      const [updated] = await db
-        .update(tenants)
-        .set(updates)
-        .where(eq(tenants.id, tenantId))
-        .returning();
-      updatedTenant = updated;
-    } catch (dbErr) {
-      const target = memoryStore.tenants.find((t) => t.id === tenantId);
-      if (target) {
-        Object.assign(target, updates);
-        updatedTenant = { ...target };
-      }
-    }
+    await updateDoc(collections.tenants, tenantId, updates);
+    const updatedTenant = { ...existingTenant, ...updates };
 
     // Log the action to audit_logs
     await logAuditAction({

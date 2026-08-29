@@ -12,7 +12,9 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
@@ -45,12 +47,31 @@ object AppModule {
         .addLast(KotlinJsonAdapterFactory())
         .build()
 
+    /**
+     * OkHttpClient with a dynamic base-URL interceptor.
+     *
+     * Retrofit is initialised with a placeholder base URL ("http://localhost/").
+     * On every request the interceptor reads the *current* backendUrl from
+     * DevicePrefs and rewrites the request's host/port accordingly, so admin
+     * URL changes take effect immediately without restarting the app.
+     */
     @Provides
     @Singleton
-    fun provideOkHttp(): OkHttpClient = OkHttpClient.Builder()
+    fun provideOkHttp(prefs: DevicePrefs): OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
+        .addInterceptor { chain ->
+            // Read the live backend URL from prefs on every call
+            val newBase = prefs.backendUrl.trimEnd('/').toHttpUrl()
+            val originalRequest: Request = chain.request()
+            val rewritten = originalRequest.url.newBuilder()
+                .scheme(newBase.scheme)
+                .host(newBase.host)
+                .port(newBase.port)
+                .build()
+            chain.proceed(originalRequest.newBuilder().url(rewritten).build())
+        }
         .addInterceptor(
             HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BODY
@@ -65,6 +86,7 @@ object AppModule {
         moshi: Moshi,
         prefs: DevicePrefs
     ): Retrofit = Retrofit.Builder()
+        // Placeholder base URL — the dynamic interceptor above rewrites it at runtime
         .baseUrl(prefs.backendUrl.trimEnd('/') + "/")
         .client(okHttp)
         .addConverterFactory(MoshiConverterFactory.create(moshi))

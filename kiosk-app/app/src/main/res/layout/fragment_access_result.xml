@@ -7,14 +7,8 @@
     android:clickable="true"
     android:focusable="true">
 
-    <!-- Full-screen tinted background -->
-    <View
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:background="@drawable/bg_result_scrim"
-        android:alpha="0.92" />
-
-    <!-- Result card — centered vertically -->
+    <!-- Result card — centered vertically. No scrim: the root's solid green/red/amber
+         background IS the signal and must read at full saturation from a distance. -->
     <LinearLayout
         android:id="@+id/card_content"
         android:layout_width="match_parent"
@@ -39,7 +33,8 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
-            android:textSize="36sp"
+            android:textSize="40sp"
+            android:textColor="@color/white"
             android:fontFamily="sans-serif-black"
             android:textStyle="bold"
             android:textAlignment="center"
@@ -51,8 +46,9 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
-            android:textSize="28sp"
+            android:textSize="32sp"
             android:fontFamily="sans-serif-medium"
+            android:textStyle="bold"
             android:textColor="@color/white"
             android:textAlignment="center"
             android:visibility="gone" />
@@ -62,10 +58,14 @@
             android:id="@+id/tv_status_badge"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:textSize="20sp"
+            android:layout_marginTop="10dp"
+            android:textSize="16sp"
             android:fontFamily="sans-serif-medium"
             android:textStyle="bold"
+            android:textColor="@color/white"
+            android:background="#33000000"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="4dp"
             android:textAlignment="center"
             android:visibility="gone" />
 
@@ -74,9 +74,9 @@
             android:id="@+id/tv_plan_info"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="14dp"
             android:textSize="18sp"
-            android:textColor="#CCFFFFFF"
+            android:textColor="#EEFFFFFF"
             android:textAlignment="center"
             android:visibility="gone" />
 
@@ -85,9 +85,11 @@
             android:id="@+id/tv_days_left"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:textSize="16sp"
-            android:textColor="#AAFFFFFF"
+            android:layout_marginTop="10dp"
+            android:textSize="24sp"
+            android:fontFamily="sans-serif-medium"
+            android:textStyle="bold"
+            android:textColor="@color/white"
             android:textAlignment="center"
             android:visibility="gone" />
 
@@ -96,9 +98,9 @@
             android:id="@+id/tv_message"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
+            android:layout_marginTop="18dp"
             android:textSize="18sp"
-            android:textColor="#BBFFFFFF"
+            android:textColor="#EEFFFFFF"
             android:textAlignment="center"
             android:visibility="gone" />
 

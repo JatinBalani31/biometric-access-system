@@ -135,8 +135,8 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:valueFrom="50"
-                    android:valueTo="90"
+                    android:valueFrom="5"
+                    android:valueTo="95"
                     android:stepSize="1" />
 
                 <TextView
@@ -170,9 +170,9 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:valueFrom="5"
-                    android:valueTo="120"
-                    android:stepSize="5" />
+                    android:valueFrom="15"
+                    android:valueTo="1440"
+                    android:stepSize="15" />
 
                 <TextView
                     android:id="@+id/tv_sync_interval_value"

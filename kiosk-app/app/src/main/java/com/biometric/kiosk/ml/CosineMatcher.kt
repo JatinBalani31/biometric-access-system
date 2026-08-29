@@ -42,19 +42,38 @@ class CosineMatcher @Inject constructor() {
             return MatchResult(match = null, score = 0f, reason = MatchReason.GALLERY_EMPTY)
         }
 
-        var bestScore = Float.MIN_VALUE
+        var bestScore = -1f
         var bestEntity: EmbeddingEntity? = null
+        var incompatible = 0
 
         for (entity in gallery) {
             val galleryVector = try {
-                entity.toFloatArray()
+                entity.toFloatArray().also {
+                    if (it.isEmpty()) android.util.Log.e("CosineMatcher", "Empty vector for ${entity.subscriberName}")
+                }
             } catch (e: Exception) {
+                android.util.Log.e("CosineMatcher", "Failed to parse vector for ${entity.subscriberName}: ${e.message}")
                 continue // Skip malformed entries
             }
 
-            if (galleryVector.size != probe.size) continue
+            // Vectors of differing length came from a different extractor. Truncating and
+            // comparing them yields a meaningless near-zero score that presents as
+            // "face not recognised" — the exact failure this guard exists to surface.
+            if (galleryVector.size != probe.size) {
+                incompatible++
+                android.util.Log.e(
+                    "CosineMatcher",
+                    "Skipping ${entity.subscriberName} (ID ${entity.subscriberId}): enrolled as " +
+                        "${galleryVector.size}-D but this device produces ${probe.size}-D. " +
+                        "They were enrolled with a different model and must re-enrol."
+                )
+                continue
+            }
 
             val score = cosineSimilarity(probe, galleryVector)
+
+            android.util.Log.d("CosineMatcher", "Subscriber ${entity.subscriberName} (ID ${entity.subscriberId}): score = $score, threshold = $threshold")
+
             if (score > bestScore) {
                 bestScore = score
                 bestEntity = entity
@@ -62,6 +81,8 @@ class CosineMatcher @Inject constructor() {
         }
 
         return when {
+            bestEntity == null && incompatible > 0 ->
+                MatchResult(null, 0f, MatchReason.INCOMPATIBLE_GALLERY)
             bestEntity == null -> MatchResult(null, 0f, MatchReason.GALLERY_EMPTY)
             bestScore >= threshold -> MatchResult(bestEntity, bestScore, MatchReason.MATCH)
             else -> MatchResult(null, bestScore, MatchReason.BELOW_THRESHOLD)
@@ -90,7 +111,8 @@ data class MatchResult(
 }
 
 enum class MatchReason {
-    MATCH,           // score >= threshold
-    BELOW_THRESHOLD, // best score < threshold
-    GALLERY_EMPTY    // no embeddings in DB yet (sync hasn't run)
+    MATCH,                // score >= threshold
+    BELOW_THRESHOLD,      // best score < threshold
+    GALLERY_EMPTY,        // no embeddings in DB yet (sync hasn't run)
+    INCOMPATIBLE_GALLERY  // every cached vector came from a different model
 }

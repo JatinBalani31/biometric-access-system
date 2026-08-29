@@ -300,6 +300,38 @@ export function RegistrationPortal() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [result, setResult] = useState<RegistrationResult | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; email?: string; phone?: string }>({});
+
+  // ─── Field-level validation ──────────────────────────────────────────────
+  const NAME_PATTERN = /^[A-Za-z][A-Za-z .'-]{1,79}$/;
+  const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const PHONE_PATTERN = /^[+]?[\d][\d\s-]{6,17}$/;
+
+  const validateName = (value: string): string | undefined => {
+    const trimmed = value.trim();
+    if (!trimmed) return 'Full name is required.';
+    if (trimmed.length < 2) return 'Name must be at least 2 characters.';
+    if (!NAME_PATTERN.test(trimmed)) return 'Name can only contain letters, spaces, hyphens, and apostrophes.';
+    return undefined;
+  };
+
+  const validateEmail = (value: string): string | undefined => {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined; // optional
+    if (!EMAIL_PATTERN.test(trimmed)) return 'Enter a valid email address (e.g. name@example.com).';
+    return undefined;
+  };
+
+  const validatePhone = (value: string): string | undefined => {
+    const trimmed = value.trim();
+    if (!trimmed) return undefined; // optional
+    if (!PHONE_PATTERN.test(trimmed)) return 'Enter a valid phone number (7-18 digits, optional + prefix).';
+    return undefined;
+  };
+
+  const handleNameBlur = () => setFieldErrors((prev) => ({ ...prev, name: validateName(name) }));
+  const handleEmailBlur = () => setFieldErrors((prev) => ({ ...prev, email: validateEmail(email) }));
+  const handlePhoneBlur = () => setFieldErrors((prev) => ({ ...prev, phone: validatePhone(phone) }));
 
   // Load tenants on mount
   useEffect(() => {
@@ -331,8 +363,19 @@ export function RegistrationPortal() {
       setValidationError('Please select an organisation first.');
       return;
     }
-    if (!name.trim()) {
-      setValidationError('Please enter your full name.');
+
+    const nameErr = validateName(name);
+    const emailErr = validateEmail(email);
+    const phoneErr = validatePhone(phone);
+    setFieldErrors({ name: nameErr, email: emailErr, phone: phoneErr });
+
+    if (nameErr || emailErr || phoneErr) {
+      setValidationError('Please fix the highlighted fields below.');
+      return;
+    }
+
+    if (plans.length > 0 && !selectedPlanId) {
+      setValidationError('Please choose a subscription plan.');
       return;
     }
 
@@ -385,6 +428,8 @@ export function RegistrationPortal() {
     setFaceVector(null);
     setResult(null);
     setSubmitError(null);
+    setFieldErrors({});
+    setValidationError(null);
   };
 
   const selectedTenant = tenants.find((t) => t.id === selectedTenantId);
@@ -541,11 +586,18 @@ export function RegistrationPortal() {
                         type="text"
                         required
                         value={name}
-                        onChange={(e) => setName(e.target.value)}
+                        onChange={(e) => { setName(e.target.value); if (fieldErrors.name) setFieldErrors((p) => ({ ...p, name: undefined })); }}
+                        onBlur={handleNameBlur}
                         placeholder="e.g. Jatin Balani"
-                        className="w-full pl-10 pr-4 py-3 bg-slate-900/80 border border-slate-700 hover:border-slate-600 focus:border-violet-500 focus:ring-1 focus:ring-violet-500/30 text-white text-sm rounded-xl outline-none transition placeholder:text-slate-600"
+                        aria-invalid={!!fieldErrors.name}
+                        className={`w-full pl-10 pr-4 py-3 bg-slate-900/80 border text-white text-sm rounded-xl outline-none transition placeholder:text-slate-600 ${
+                          fieldErrors.name
+                            ? 'border-rose-500/70 focus:border-rose-500 focus:ring-1 focus:ring-rose-500/30'
+                            : 'border-slate-700 hover:border-slate-600 focus:border-violet-500 focus:ring-1 focus:ring-violet-500/30'
+                        }`}
                       />
                     </div>
+                    {fieldErrors.name && <p className="mt-1.5 text-xs text-rose-400">{fieldErrors.name}</p>}
                   </div>
 
                   <div>
@@ -555,11 +607,18 @@ export function RegistrationPortal() {
                       <input
                         type="email"
                         value={email}
-                        onChange={(e) => setEmail(e.target.value)}
+                        onChange={(e) => { setEmail(e.target.value); if (fieldErrors.email) setFieldErrors((p) => ({ ...p, email: undefined })); }}
+                        onBlur={handleEmailBlur}
                         placeholder="you@example.com"
-                        className="w-full pl-10 pr-4 py-3 bg-slate-900/80 border border-slate-700 hover:border-slate-600 focus:border-violet-500 focus:ring-1 focus:ring-violet-500/30 text-white text-sm rounded-xl outline-none transition placeholder:text-slate-600"
+                        aria-invalid={!!fieldErrors.email}
+                        className={`w-full pl-10 pr-4 py-3 bg-slate-900/80 border text-white text-sm rounded-xl outline-none transition placeholder:text-slate-600 ${
+                          fieldErrors.email
+                            ? 'border-rose-500/70 focus:border-rose-500 focus:ring-1 focus:ring-rose-500/30'
+                            : 'border-slate-700 hover:border-slate-600 focus:border-violet-500 focus:ring-1 focus:ring-violet-500/30'
+                        }`}
                       />
                     </div>
+                    {fieldErrors.email && <p className="mt-1.5 text-xs text-rose-400">{fieldErrors.email}</p>}
                   </div>
 
                   <div>
@@ -569,11 +628,18 @@ export function RegistrationPortal() {
                       <input
                         type="tel"
                         value={phone}
-                        onChange={(e) => setPhone(e.target.value)}
+                        onChange={(e) => { setPhone(e.target.value); if (fieldErrors.phone) setFieldErrors((p) => ({ ...p, phone: undefined })); }}
+                        onBlur={handlePhoneBlur}
                         placeholder="+91 98765 43210"
-                        className="w-full pl-10 pr-4 py-3 bg-slate-900/80 border border-slate-700 hover:border-slate-600 focus:border-violet-500 focus:ring-1 focus:ring-violet-500/30 text-white text-sm rounded-xl outline-none transition placeholder:text-slate-600"
+                        aria-invalid={!!fieldErrors.phone}
+                        className={`w-full pl-10 pr-4 py-3 bg-slate-900/80 border text-white text-sm rounded-xl outline-none transition placeholder:text-slate-600 ${
+                          fieldErrors.phone
+                            ? 'border-rose-500/70 focus:border-rose-500 focus:ring-1 focus:ring-rose-500/30'
+                            : 'border-slate-700 hover:border-slate-600 focus:border-violet-500 focus:ring-1 focus:ring-violet-500/30'
+                        }`}
                       />
                     </div>
+                    {fieldErrors.phone && <p className="mt-1.5 text-xs text-rose-400">{fieldErrors.phone}</p>}
                   </div>
                 </div>
 

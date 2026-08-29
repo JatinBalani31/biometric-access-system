@@ -60,7 +60,12 @@ data class EmbeddingEntity(
     @ColumnInfo(name = "tenant_id")
     val tenantId: Int
 ) {
-    /** Deserializes the stored CSV string back to a FloatArray for inference */
-    fun toFloatArray(): FloatArray =
-        vector.split(",").map { it.trim().toFloat() }.toFloatArray()
+    /** Deserializes the stored CSV/JSON string back to a FloatArray for inference */
+    fun toFloatArray(): FloatArray {
+        val clean = vector.trim().removePrefix("[").removeSuffix("]")
+        if (clean.isBlank()) return FloatArray(0)
+        return clean.split(",")
+            .mapNotNull { it.trim().toFloatOrNull() }
+            .toFloatArray()
+    }
 }

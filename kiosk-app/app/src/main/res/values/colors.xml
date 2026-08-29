@@ -8,23 +8,20 @@
     <color name="white_70">#B3FFFFFF</color>
     <color name="white_40">#66FFFFFF</color>
 
-    <!-- ── Access Granted (deep emerald) ──────────────────────────────── -->
-    <color name="granted_bg_start">#0A2E1A</color>
-    <color name="granted_bg_end">#0D3B22</color>
-    <color name="granted_text">#4ADE80</color>     <!-- Bright green -->
-    <color name="color_active">#22C55E</color>
+    <!-- ── Access Granted (solid, saturated green — must read as "correct" from a distance) ── -->
+    <color name="granted_bg_solid">#16A34A</color>
+    <color name="granted_text">#FFFFFF</color>
+    <color name="color_active">#052E16</color>
 
-    <!-- ── Subscription Expired (warm amber) ──────────────────────────── -->
-    <color name="expired_bg_start">#2C1A00</color>
-    <color name="expired_bg_end">#3B2200</color>
-    <color name="expired_text">#FCD34D</color>    <!-- Amber yellow -->
-    <color name="color_expired">#F59E0B</color>
+    <!-- ── Subscription Expired (solid amber — distinct from both granted and denied) ── -->
+    <color name="expired_bg_solid">#D97706</color>
+    <color name="expired_text">#FFFFFF</color>
+    <color name="color_expired">#451A03</color>
 
-    <!-- ── Not Recognized / Denied (deep red) ─────────────────────────── -->
-    <color name="denied_bg_start">#2A0A0A</color>
-    <color name="denied_bg_end">#3B0D0D</color>
-    <color name="denied_text">#F87171</color>     <!-- Soft red -->
-    <color name="color_denied">#EF4444</color>
+    <!-- ── Not Recognized / Denied (solid, saturated red — must read as "wrong" from a distance) ── -->
+    <color name="denied_bg_solid">#DC2626</color>
+    <color name="denied_text">#FFFFFF</color>
+    <color name="color_denied">#450A0A</color>
 
     <!-- ── Danger (admin logout button) ───────────────────────────────── -->
     <color name="color_danger">#DC2626</color>

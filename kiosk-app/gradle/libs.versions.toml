@@ -1,6 +1,7 @@
 [versions]
-agp = "8.4.2"
+agp = "8.5.1"
 kotlin = "1.9.24"
+ksp = "1.9.24-1.0.20"
 coreKtx = "1.13.1"
 activity = "1.9.1"
 fragment = "1.8.2"
@@ -93,6 +94,6 @@ coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "kotlinx-co
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
-kotlin-kapt = { id = "org.jetbrains.kotlin.kapt", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }

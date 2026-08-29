@@ -1,5 +1,5 @@
 import { adminDb } from './firebase-admin.ts';
-import { FaceEmbeddingRecord } from '../types/api.ts';
+import { FaceEmbeddingRecord, FACE_MODEL_ID, FACE_EMBEDDING_DIM } from '../types/api.ts';
 
 export const EMBEDDINGS_COLLECTION = 'face_embeddings';
 export const SYNC_STATUS_COLLECTION = 'sync_status';
@@ -19,12 +19,17 @@ export interface SyncStatusRecord {
 }
 
 /**
- * Generate a synthetic 128-dimensional normalized face embedding vector for testing/demo
+ * Generate a synthetic normalized vector for UI/demo seeding only.
+ *
+ * These are NOT real faces and can never match a live probe. They are stamped with
+ * SYNTHETIC_MODEL_ID at the call site so /api/kiosk/face-embeddings filters them out
+ * of device galleries. Dimension matches the real model so nothing downstream has to
+ * special-case the shape.
  */
 export function generateSyntheticEmbedding(seed: number = Math.random()): number[] {
   const vector: number[] = [];
   let sumSq = 0;
-  for (let i = 0; i < 128; i++) {
+  for (let i = 0; i < FACE_EMBEDDING_DIM; i++) {
     const val = Math.sin(seed * (i + 1)) * Math.cos(seed * (i + 7));
     vector.push(parseFloat(val.toFixed(4)));
     sumSq += val * val;
@@ -69,14 +74,13 @@ export async function saveFaceEmbedding(params: {
   subscriberId: number;
   subscriberName: string;
   email?: string;
-  vector?: number[];
+  vector: number[];
+  modelId?: string;
   status?: 'active' | 'revoked' | 'pending';
 }): Promise<FaceEmbeddingRecord> {
   const docId = `tenant_${params.tenantId}_sub_${params.subscriberId}`;
   const now = new Date().toISOString();
-  const vector = params.vector && params.vector.length > 0
-    ? params.vector
-    : generateSyntheticEmbedding(params.subscriberId * 31 + params.tenantId);
+  const vector = params.vector;
 
   const embeddingData: FaceEmbeddingRecord = {
     id: docId,
@@ -86,6 +90,7 @@ export async function saveFaceEmbedding(params: {
     email: params.email || '',
     vector,
     vectorDimension: vector.length,
+    modelId: params.modelId || FACE_MODEL_ID,
     status: params.status || 'active',
     updatedAt: now,
     createdAt: now,
@@ -184,17 +189,21 @@ export async function fetchFaceEmbeddingsForTenant(params: {
   const tenantId = params.tenantId;
 
   try {
-    let query: FirebaseFirestore.Query = adminDb
+    const snapshot = await adminDb
       .collection(EMBEDDINGS_COLLECTION)
-      .where('tenantId', '==', tenantId);
+      .where('tenantId', '==', tenantId)
+      .get();
+
+    let allDocs = snapshot.docs.map((d) => d.data() as FaceEmbeddingRecord);
 
     if (params.since) {
-      // Incremental sync filter: only items updated on or after timestamp
-      query = query.where('updatedAt', '>=', params.since);
+      const sinceTime = new Date(params.since).getTime();
+      allDocs = allDocs.filter((d) => new Date(d.updatedAt).getTime() >= sinceTime);
     }
 
-    const snapshot = await query.orderBy('updatedAt', 'asc').get();
-    const allDocs = snapshot.docs.map((d) => d.data() as FaceEmbeddingRecord);
+    // Sort by updatedAt asc
+    allDocs.sort((a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime());
+
     const total = allDocs.length;
     const startIndex = (page - 1) * limit;
     const paginated = allDocs.slice(startIndex, startIndex + limit);
@@ -206,7 +215,7 @@ export async function fetchFaceEmbeddingsForTenant(params: {
       hasMore,
     };
   } catch (error) {
-    console.error('Firestore fetchFaceEmbeddingsForTenant error (using mock fallback for resilience):', error);
+    console.error('Firestore fetchFaceEmbeddingsForTenant error:', error);
     return {
       embeddings: [],
       total: 0,
@@ -297,5 +306,23 @@ export async function recordDeviceSyncLog(params: {
     });
   } catch (err) {
     console.warn('Firestore device sync log error:', err);
+  }
+}
+
+/**
+ * Clear all embeddings from Firestore for a clean reset.
+ */
+export async function clearAllFirestoreEmbeddings(): Promise<void> {
+  try {
+    const snapshot = await adminDb.collection(EMBEDDINGS_COLLECTION).get();
+    if (snapshot.empty) return;
+    const batch = adminDb.batch();
+    snapshot.docs.forEach((doc) => {
+      batch.delete(doc.ref);
+    });
+    await batch.commit();
+    console.log(`[Firestore] Cleared all ${snapshot.docs.length} face embeddings.`);
+  } catch (err: any) {
+    console.warn('[Firestore] clearAllFirestoreEmbeddings warning:', err.message);
   }
 }

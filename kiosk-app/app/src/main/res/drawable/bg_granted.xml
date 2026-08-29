@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- ACCESS GRANTED - Deep emerald green gradient -->
+<!-- ACCESS GRANTED - solid, saturated green. Deliberately flat (no gradient) so it
+     reads unambiguously as "correct" at a glance, from a distance, at the gate. -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android">
-    <gradient
-        android:startColor="@color/granted_bg_start"
-        android:endColor="@color/granted_bg_end"
-        android:angle="135"
-        android:type="linear" />
+    <solid android:color="@color/granted_bg_solid" />
 </shape>

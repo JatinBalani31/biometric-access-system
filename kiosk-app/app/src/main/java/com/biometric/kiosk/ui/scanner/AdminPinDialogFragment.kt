@@ -32,10 +32,11 @@ class AdminPinDialogFragment : DialogFragment() {
 
         dialog.setOnShowListener {
             dialog.getButton(Dialog.BUTTON_POSITIVE).setOnClickListener {
-                val pin = binding.etPin.text.toString()
+                val pin = binding.etPin.text.toString().trim()
                 if (devicePrefs.verifyAdminPin(pin)) {
-                    dismiss()
-                    startActivity(Intent(requireActivity(), AdminActivity::class.java))
+                    dismissAllowingStateLoss()
+                    val intent = Intent(requireActivity(), AdminActivity::class.java)
+                    startActivity(intent)
                 } else {
                     binding.tilPin.error = "Incorrect PIN"
                     binding.etPin.text?.clear()

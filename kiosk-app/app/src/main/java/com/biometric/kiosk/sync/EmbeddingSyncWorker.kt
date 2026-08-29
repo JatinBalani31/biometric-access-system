@@ -105,13 +105,17 @@ class EmbeddingSyncWorker @AssistedInject constructor(
         }
 
         return try {
-            // Use delta sync if we have a previous sync timestamp
-            val since = devicePrefs.lastSyncAt
-            Log.i(TAG, "Starting sync: tenantId=$tenantId, since=$since")
+            val count = embeddingDao.getCount(tenantId)
+            // If local DB has 0 records, always do full sync (since = null)
+            val since = if (count > 0) devicePrefs.lastSyncAt else null
+            Log.i(TAG, "Starting sync: tenantId=$tenantId, localCount=$count, since=$since")
 
             var page = 1
             var totalSynced = 0
             var hasMore = true
+            var serverDimension: Int? = null
+            var serverModelId: String? = null
+            var serverSkipped = 0
 
             while (hasMore) {
                 val response = apiService.getFaceEmbeddings(
@@ -120,6 +124,14 @@ class EmbeddingSyncWorker @AssistedInject constructor(
                     limit = 100,
                     page = page
                 )
+
+                if (page == 1 && since == null) {
+                    embeddingDao.deleteAll()
+                }
+
+                serverDimension = response.embeddingDimension ?: serverDimension
+                serverModelId = response.modelId ?: serverModelId
+                serverSkipped = response.skippedIncompatible ?: serverSkipped
 
                 val (active, revoked) = response.embeddings.partition { it.status == "active" }
 
@@ -170,6 +182,31 @@ class EmbeddingSyncWorker @AssistedInject constructor(
                 if (!hasMore) {
                     devicePrefs.lastSyncAt = response.serverTime
                 }
+            }
+
+            // Evict rows whose vectors this device cannot match. The server withholds
+            // foreign-model embeddings rather than revoking them, so an incremental sync
+            // would otherwise keep them cached forever — the kiosk would report members
+            // cached while never recognising any of them.
+            serverDimension?.let { expectedDim ->
+                val stale = embeddingDao.getAll().filter { it.toFloatArray().size != expectedDim }
+                if (stale.isNotEmpty()) {
+                    embeddingDao.deleteByIds(stale.map { it.subscriberId })
+                    Log.w(
+                        TAG,
+                        "Evicted ${stale.size} cached embedding(s) that were not $expectedDim-D: " +
+                            stale.joinToString { it.subscriberName } +
+                            ". They were enrolled with a different model and must re-enrol."
+                    )
+                }
+            }
+
+            if (serverSkipped > 0) {
+                Log.w(
+                    TAG,
+                    "Server withheld $serverSkipped enrolled face(s) from this device — they were " +
+                        "captured with a different model than ${serverModelId ?: "the configured one"}."
+                )
             }
 
             val cachedCount = embeddingDao.getCount(tenantId)

@@ -82,4 +82,9 @@ class AdminViewModel @Inject constructor(
             devicePrefs.lastSyncAt = null
         }
     }
+
+    fun triggerFullResync() {
+        devicePrefs.lastSyncAt = null
+        loadSettings()
+    }
 }

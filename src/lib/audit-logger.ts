@@ -1,6 +1,5 @@
-import { db } from '../db/index.ts';
-import { auditLogs } from '../db/schema.ts';
-import { memoryStore } from './memory-store.ts';
+import { createDoc, collections } from '../db/firestore.ts';
+import { NewAuditLog } from '../db/models.ts';
 
 export interface AuditLogPayload {
   actorEmail: string;
@@ -16,7 +15,7 @@ export interface AuditLogPayload {
 }
 
 export async function logAuditAction(payload: AuditLogPayload) {
-  const record = {
+  const record: NewAuditLog = {
     actorEmail: payload.actorEmail || 'unknown@platform.io',
     actorRole: payload.actorRole || 'company_admin',
     action: payload.action,
@@ -27,22 +26,13 @@ export async function logAuditAction(payload: AuditLogPayload) {
     previousState: payload.previousState ? (typeof payload.previousState === 'string' ? payload.previousState : JSON.stringify(payload.previousState)) : null,
     newState: payload.newState ? (typeof payload.newState === 'string' ? payload.newState : JSON.stringify(payload.newState)) : null,
     ipAddress: payload.ipAddress || '127.0.0.1',
-    createdAt: new Date(),
+    createdAt: new Date().toISOString(),
   };
 
   try {
-    const [inserted] = await db.insert(auditLogs).values(record).returning();
-    return inserted;
+    return await createDoc(collections.auditLogs, record);
   } catch (err) {
-    // Fallback to memoryStore
-    const fallbackRecord = {
-      id: (memoryStore.auditLogs?.length || 0) + 1,
-      ...record,
-    };
-    if (!memoryStore.auditLogs) {
-      memoryStore.auditLogs = [];
-    }
-    memoryStore.auditLogs.unshift(fallbackRecord);
-    return fallbackRecord;
+    console.warn('[audit-logger] Firestore write failed:', err);
+    return { id: 0, ...record };
   }
 }

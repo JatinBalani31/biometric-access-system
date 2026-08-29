@@ -27,43 +27,63 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- Top status bar -->
+    <!-- Top status bar with tap-to-sync -->
     <LinearLayout
         android:id="@+id/status_bar"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
+        android:orientation="horizontal"
         android:padding="16dp"
+        android:gravity="center_vertical"
         android:background="@drawable/bg_status_bar"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <TextView
-            android:id="@+id/tv_app_name"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:text="@string/app_name"
-            android:textColor="@color/white"
-            android:textSize="20sp"
-            android:fontFamily="sans-serif-medium"
-            android:textStyle="bold" />
+            android:layout_weight="1"
+            android:orientation="vertical">
 
-        <TextView
-            android:id="@+id/tv_cached_count"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Loading..."
-            android:textColor="#AAFFFFFF"
-            android:textSize="13sp" />
+            <TextView
+                android:id="@+id/tv_app_name"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/app_name"
+                android:textColor="@color/white"
+                android:textSize="20sp"
+                android:fontFamily="sans-serif-medium"
+                android:textStyle="bold" />
 
+            <TextView
+                android:id="@+id/tv_cached_count"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="⟳ Tap to Sync"
+                android:textColor="#AAFFFFFF"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/tv_last_sync"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Last sync: —"
+                android:textColor="#88FFFFFF"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- Admin Settings Gear Button -->
         <TextView
-            android:id="@+id/tv_last_sync"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Last sync: —"
-            android:textColor="#88FFFFFF"
-            android:textSize="12sp" />
+            android:id="@+id/btn_admin_gear"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:gravity="center"
+            android:text="⚙️"
+            android:textSize="24sp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true" />
 
     </LinearLayout>
 
@@ -93,7 +113,7 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent" />
 
-    <!-- Hidden triple-tap target in top-right corner for admin access -->
+    <!-- Admin tap target -->
     <View
         android:id="@+id/admin_tap_target"
         android:layout_width="80dp"

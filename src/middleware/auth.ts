@@ -1,8 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { adminAuth } from '../lib/firebase-admin.ts';
-import { db } from '../db/index.ts';
-import { companyAdmins, tenantAdmins, tenants, devices } from '../db/schema.ts';
-import { eq, and } from 'drizzle-orm';
+import { findOne, getDoc, collections } from '../db/firestore.ts';
+import { Device, Tenant, CompanyAdmin, TenantAdmin } from '../db/models.ts';
 import { AuthContext, ErrorResponse } from '../types/api.ts';
 
 export interface AuthenticatedRequest extends Request {
@@ -37,32 +36,8 @@ export async function authenticate(
     }
 
     if (deviceToken) {
-      let matchedDevice: any;
-      let tenant: any;
-
-      try {
-        const [dev] = await db
-          .select()
-          .from(devices)
-          .where(eq(devices.deviceToken, deviceToken))
-          .limit(1);
-        matchedDevice = dev;
-
-        if (matchedDevice) {
-          const [t] = await db
-            .select()
-            .from(tenants)
-            .where(eq(tenants.id, matchedDevice.tenantId))
-            .limit(1);
-          tenant = t;
-        }
-      } catch (err) {
-        const { memoryStore } = await import('../lib/memory-store.ts');
-        matchedDevice = memoryStore.devices.find((d) => d.deviceToken === deviceToken);
-        if (matchedDevice) {
-          tenant = memoryStore.tenants.find((t) => t.id === matchedDevice.tenantId);
-        }
-      }
+      const matchedDevice = await findOne<Device>(collections.devices, 'deviceToken', deviceToken);
+      const tenant = matchedDevice ? await getDoc<Tenant>(collections.tenants, matchedDevice.tenantId) : null;
 
       if (!matchedDevice || matchedDevice.status === 'revoked') {
         const errorRes: ErrorResponse = {
@@ -105,19 +80,7 @@ export async function authenticate(
 
       if (simulatedRole === 'tenant_admin') {
         const tenantId = simulatedTenantId ? parseInt(simulatedTenantId, 10) : 1;
-        let tenant: any;
-
-        try {
-          const [t] = await db
-            .select()
-            .from(tenants)
-            .where(eq(tenants.id, tenantId))
-            .limit(1);
-          tenant = t;
-        } catch (err) {
-          const { memoryStore } = await import('../lib/memory-store.ts');
-          tenant = memoryStore.tenants.find((t) => t.id === tenantId);
-        }
+        const tenant = await getDoc<Tenant>(collections.tenants, tenantId);
 
         if (!tenant) {
           return res.status(404).json({
@@ -147,19 +110,7 @@ export async function authenticate(
 
       if (simulatedRole === 'device') {
         const tenantId = simulatedTenantId ? parseInt(simulatedTenantId, 10) : 1;
-        let tenant: any;
-
-        try {
-          const [t] = await db
-            .select()
-            .from(tenants)
-            .where(eq(tenants.id, tenantId))
-            .limit(1);
-          tenant = t;
-        } catch (err) {
-          const { memoryStore } = await import('../lib/memory-store.ts');
-          tenant = memoryStore.tenants.find((t) => t.id === tenantId);
-        }
+        const tenant = await getDoc<Tenant>(collections.tenants, tenantId);
 
         if (!tenant || tenant.status === 'suspended') {
           return res.status(403).json({
@@ -185,11 +136,7 @@ export async function authenticate(
       const token = authHeader.replace('Bearer ', '').trim();
 
       // Check if it's a known device token passed in standard Bearer
-      const [matchedDevice] = await db
-        .select()
-        .from(devices)
-        .where(eq(devices.deviceToken, token))
-        .limit(1);
+      const matchedDevice = await findOne<Device>(collections.devices, 'deviceToken', token);
 
       if (matchedDevice) {
         if (matchedDevice.status === 'revoked') {
@@ -199,11 +146,7 @@ export async function authenticate(
           });
         }
 
-        const [tenant] = await db
-          .select()
-          .from(tenants)
-          .where(eq(tenants.id, matchedDevice.tenantId))
-          .limit(1);
+        const tenant = await getDoc<Tenant>(collections.tenants, matchedDevice.tenantId);
 
         if (!tenant || tenant.status === 'suspended') {
           return res.status(403).json({
@@ -230,11 +173,7 @@ export async function authenticate(
         const uid = decoded.uid;
 
         // Check if Company Admin
-        const [compAdmin] = await db
-          .select()
-          .from(companyAdmins)
-          .where(eq(companyAdmins.email, email))
-          .limit(1);
+        const compAdmin = await findOne<CompanyAdmin>(collections.companyAdmins, 'email', email);
 
         if (compAdmin) {
           req.auth = {
@@ -246,18 +185,10 @@ export async function authenticate(
         }
 
         // Check if Tenant Admin
-        const [tenAdmin] = await db
-          .select()
-          .from(tenantAdmins)
-          .where(eq(tenantAdmins.email, email))
-          .limit(1);
+        const tenAdmin = await findOne<TenantAdmin>(collections.tenantAdmins, 'email', email);
 
         if (tenAdmin) {
-          const [tenant] = await db
-            .select()
-            .from(tenants)
-            .where(eq(tenants.id, tenAdmin.tenantId))
-            .limit(1);
+          const tenant = await getDoc<Tenant>(collections.tenants, tenAdmin.tenantId);
 
           if (!tenant || tenant.status === 'suspended') {
             return res.status(403).json({

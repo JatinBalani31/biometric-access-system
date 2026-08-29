@@ -37,8 +37,20 @@ class DevicePrefs @Inject constructor(
         const val KEY_IS_REGISTERED = "is_registered"
 
         // Defaults
-        const val DEFAULT_THRESHOLD = 0.65f
-        const val DEFAULT_SYNC_INTERVAL = 15
+        /**
+         * Cosine threshold for MobileFaceNet (192-D, ArcFace-trained) on eye-aligned
+         * 112x112 crops. Genuine pairs typically score 0.7-0.9 and impostors 0.1-0.4,
+         * so 0.62 sits in the gap. 0.50 was permissive enough to admit lookalikes once
+         * the enrolment and probe vectors actually share a space.
+         */
+        const val DEFAULT_THRESHOLD = 0.62f
+
+        /**
+         * Kiosk is designed to run offline between syncs — it always matches faces from
+         * the local SQLCipher cache regardless of connectivity. Default to once a day so
+         * it only needs a working connection briefly, rather than continuously.
+         */
+        const val DEFAULT_SYNC_INTERVAL = 1440
         const val DEFAULT_ADMIN_PIN = "1234"
     }
 

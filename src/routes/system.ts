@@ -1,10 +1,9 @@
 import { Router, Response } from 'express';
-import { db } from '../db/index.ts';
-import { tenants, tenantAdmins, subscriptionPlans, subscribers, devices, companyAdmins, auditLogs } from '../db/schema.ts';
-import { sql, desc, eq, and } from 'drizzle-orm';
+import { collections, createDoc, listDocs, findOne, clearCollection } from '../db/firestore.ts';
+import { Tenant, TenantAdmin, SubscriptionPlan, Subscriber, Device, CompanyAdmin, AuditLog } from '../db/models.ts';
 import { AuthenticatedRequest, requireCompanyAdmin } from '../middleware/auth.ts';
-import { saveFaceEmbedding } from '../lib/firestore-sync.ts';
-import { memoryStore } from '../lib/memory-store.ts';
+import { saveFaceEmbedding, generateSyntheticEmbedding } from '../lib/firestore-sync.ts';
+import { SYNTHETIC_MODEL_ID } from '../types/api.ts';
 
 export const systemRouter = Router();
 
@@ -18,38 +17,29 @@ const TIER_PRICING: Record<string, number> = {
 // GET /api/system/summary - Public/Admin system dashboard summary
 systemRouter.get('/summary', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const [tenantCount] = await db.select({ count: sql<number>`count(*)::int` }).from(tenants);
-    const [subCount] = await db.select({ count: sql<number>`count(*)::int` }).from(subscribers);
-    const [planCount] = await db.select({ count: sql<number>`count(*)::int` }).from(subscriptionPlans);
-    const [devCount] = await db.select({ count: sql<number>`count(*)::int` }).from(devices);
-    const tenantList = await db.select().from(tenants).orderBy(tenants.id);
+    const [tenantList, subscriberList, planList, deviceList] = await Promise.all([
+      listDocs<Tenant>(collections.tenants),
+      listDocs<Subscriber>(collections.subscribers),
+      listDocs<SubscriptionPlan>(collections.subscriptionPlans),
+      listDocs<Device>(collections.devices),
+    ]);
+
+    const sortedTenants = [...tenantList].sort((a, b) => a.id - b.id);
 
     return res.json({
       status: 'operational',
       database: 'Cloud SQL (PostgreSQL)',
       faceEmbeddingsStore: 'Firebase Firestore',
       counts: {
-        tenants: tenantCount?.count || 0,
-        subscribers: subCount?.count || 0,
-        plans: planCount?.count || 0,
-        devices: devCount?.count || 0,
+        tenants: tenantList.length,
+        subscribers: subscriberList.length,
+        plans: planList.length,
+        devices: deviceList.length,
       },
-      tenants: tenantList,
+      tenants: sortedTenants,
     });
-  } catch (dbErr) {
-    // Fallback to memory store
-    return res.json({
-      status: 'operational',
-      database: 'Cloud SQL (PostgreSQL)',
-      faceEmbeddingsStore: 'Firebase Firestore',
-      counts: {
-        tenants: memoryStore.tenants.length,
-        subscribers: memoryStore.subscribers.length,
-        plans: memoryStore.subscriptionPlans.length,
-        devices: memoryStore.devices.length,
-      },
-      tenants: memoryStore.tenants,
-    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to fetch system summary', code: 'INTERNAL_ERROR', details: error.message });
   }
 });
 
@@ -60,19 +50,11 @@ systemRouter.get('/usage-analytics', async (req: AuthenticatedRequest, res: Resp
     const staleThresholdMs = staleDaysParam * 24 * 60 * 60 * 1000;
     const now = new Date();
 
-    let allTenants: any[] = [];
-    let allSubscribers: any[] = [];
-    let allDevices: any[] = [];
-
-    try {
-      allTenants = await db.select().from(tenants);
-      allSubscribers = await db.select().from(subscribers);
-      allDevices = await db.select().from(devices);
-    } catch (err) {
-      allTenants = memoryStore.tenants;
-      allSubscribers = memoryStore.subscribers;
-      allDevices = memoryStore.devices;
-    }
+    const [allTenants, allSubscribers, allDevices] = await Promise.all([
+      listDocs<Tenant>(collections.tenants),
+      listDocs<Subscriber>(collections.subscribers),
+      listDocs<Device>(collections.devices),
+    ]);
 
     // 1. Capacity Analysis (Tenants near or exceeding subscriber limit)
     const capacityAlerts = allTenants.map((t) => {
@@ -124,7 +106,7 @@ systemRouter.get('/usage-analytics', async (req: AuthenticatedRequest, res: Resp
     // 3. Multi-Tenant Subscriber Growth over Time (Simulated/Aggregated 6-month historical buckets)
     const months = ['Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug'];
     const totalCurrentSubs = allSubscribers.length;
-    
+
     // Build aggregate timeline
     const subscriberTimeline = months.map((month, idx) => {
       // Historical trend calculation
@@ -161,16 +143,10 @@ systemRouter.get('/usage-analytics', async (req: AuthenticatedRequest, res: Resp
 // GET /api/system/billing - Basic billing overview & revenue per tenant
 systemRouter.get('/billing', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    let allTenants: any[] = [];
-    let allSubscribers: any[] = [];
-
-    try {
-      allTenants = await db.select().from(tenants);
-      allSubscribers = await db.select().from(subscribers);
-    } catch (err) {
-      allTenants = memoryStore.tenants;
-      allSubscribers = memoryStore.subscribers;
-    }
+    const [allTenants, allSubscribers] = await Promise.all([
+      listDocs<Tenant>(collections.tenants),
+      listDocs<Subscriber>(collections.subscribers),
+    ]);
 
     const tenantBilling = allTenants.map((t) => {
       const activeSubs = allSubscribers.filter((s) => s.tenantId === t.id && s.status === 'active').length;
@@ -239,35 +215,20 @@ systemRouter.get('/billing', async (req: AuthenticatedRequest, res: Response) =>
 // GET /api/system/audit-logs - Query audit trail
 systemRouter.get('/audit-logs', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { tenant_id, action, limit = '50' } = req.query;
+    const { tenant_id, limit = '50' } = req.query;
     const limitNum = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 50));
 
-    let logs: any[] = [];
-    try {
-      if (tenant_id) {
-        logs = await db
-          .select()
-          .from(auditLogs)
-          .where(eq(auditLogs.tenantId, parseInt(String(tenant_id), 10)))
-          .orderBy(desc(auditLogs.createdAt))
-          .limit(limitNum);
-      } else {
-        logs = await db
-          .select()
-          .from(auditLogs)
-          .orderBy(desc(auditLogs.createdAt))
-          .limit(limitNum);
-      }
-    } catch (err) {
-      logs = (memoryStore.auditLogs || []).slice();
-      if (tenant_id) {
-        logs = logs.filter((l) => l.tenantId === parseInt(String(tenant_id), 10));
-      }
-      if (action) {
-        logs = logs.filter((l) => l.action === action);
-      }
-      logs = logs.slice(0, limitNum);
+    let logs: AuditLog[];
+    if (tenant_id) {
+      logs = await listDocs<AuditLog>(collections.auditLogs, [['tenantId', '==', parseInt(String(tenant_id), 10)]]);
+    } else {
+      logs = await listDocs<AuditLog>(collections.auditLogs);
     }
+
+    logs = logs
+      .slice()
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, limitNum);
 
     return res.json({
       total: logs.length,
@@ -282,7 +243,7 @@ systemRouter.get('/audit-logs', async (req: AuthenticatedRequest, res: Response)
 systemRouter.post('/seed', async (req: AuthenticatedRequest, res: Response) => {
   try {
     // Check if tenants exist
-    const existingTenants = await db.select().from(tenants);
+    const existingTenants = await listDocs<Tenant>(collections.tenants);
     if (existingTenants.length > 0 && req.query.force !== 'true') {
       return res.json({
         message: 'Database already populated. Use ?force=true to reseed.',
@@ -293,129 +254,164 @@ systemRouter.post('/seed', async (req: AuthenticatedRequest, res: Response) => {
 
     // Clean up if force=true
     if (req.query.force === 'true') {
-      await db.delete(subscribers);
-      await db.delete(devices);
-      await db.delete(subscriptionPlans);
-      await db.delete(tenantAdmins);
-      await db.delete(tenants);
-      await db.delete(companyAdmins);
-      await db.delete(auditLogs);
+      await clearCollection(collections.subscribers);
+      await clearCollection(collections.devices);
+      await clearCollection(collections.subscriptionPlans);
+      await clearCollection(collections.tenantAdmins);
+      await clearCollection(collections.tenants);
+      await clearCollection(collections.companyAdmins);
+      await clearCollection(collections.auditLogs);
     }
 
+    const nowIso = new Date().toISOString();
+
     // 1. Create Superadmin
-    await db.insert(companyAdmins).values({
-      email: 'superadmin@platform.io',
-      role: 'superadmin',
-    }).onConflictDoNothing();
+    const existingSuperadmin = await findOne<CompanyAdmin>(collections.companyAdmins, 'email', 'superadmin@platform.io');
+    if (!existingSuperadmin) {
+      await createDoc<CompanyAdmin>(collections.companyAdmins, {
+        email: 'superadmin@platform.io',
+        role: 'superadmin',
+        uid: null,
+        createdAt: nowIso,
+      });
+    }
 
     // 2. Tenant 1: Apex Fitness Center
-    const [tenant1] = await db.insert(tenants).values({
+    const tenant1 = await createDoc<Tenant>(collections.tenants, {
       companyName: 'Apex Health & Fitness',
       contactEmail: 'contact@apexfitness.com',
       planTier: 'pro',
       subscriberLimit: 100,
       status: 'active',
-    }).returning();
+      createdAt: nowIso,
+    });
 
-    await db.insert(tenantAdmins).values([
-      { tenantId: tenant1.id, email: 'admin@apexfitness.com', role: 'admin' },
-      { tenantId: tenant1.id, email: 'manager@apexfitness.com', role: 'manager' },
-    ]);
+    await createDoc<TenantAdmin>(collections.tenantAdmins, {
+      tenantId: tenant1.id,
+      email: 'admin@apexfitness.com',
+      role: 'admin',
+      uid: null,
+      createdAt: nowIso,
+    });
+    await createDoc<TenantAdmin>(collections.tenantAdmins, {
+      tenantId: tenant1.id,
+      email: 'manager@apexfitness.com',
+      role: 'manager',
+      uid: null,
+      createdAt: nowIso,
+    });
 
-    const [plan1A] = await db.insert(subscriptionPlans).values({
+    const plan1A = await createDoc<SubscriptionPlan>(collections.subscriptionPlans, {
       tenantId: tenant1.id,
       name: 'Monthly Premium Membership',
       durationDays: 30,
       price: '59.00',
-    }).returning();
+      createdAt: nowIso,
+    });
 
-    const [plan1B] = await db.insert(subscriptionPlans).values({
+    const plan1B = await createDoc<SubscriptionPlan>(collections.subscriptionPlans, {
       tenantId: tenant1.id,
       name: 'Quarterly VIP Pass',
       durationDays: 90,
       price: '149.00',
-    }).returning();
+      createdAt: nowIso,
+    });
 
     const now = new Date();
-    const subsT1 = await db.insert(subscribers).values([
-      {
-        tenantId: tenant1.id,
-        name: 'Elena Rostova',
-        email: 'elena.rostova@example.com',
-        phone: '+1 (555) 234-5678',
-        planId: plan1B.id,
-        startDate: new Date(now.getTime() - 20 * 24 * 60 * 60 * 1000),
-        endDate: new Date(now.getTime() + 70 * 24 * 60 * 60 * 1000),
-        status: 'active',
-      },
-      {
-        tenantId: tenant1.id,
-        name: 'Marcus Vance',
-        email: 'marcus.vance@example.com',
-        phone: '+1 (555) 876-5432',
-        planId: plan1A.id,
-        startDate: new Date(now.getTime() - 25 * 24 * 60 * 60 * 1000),
-        endDate: new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000),
-        status: 'active',
-      },
-    ]).returning();
 
-    const [dev1A] = await db.insert(devices).values({
+    const sub1 = await createDoc<Subscriber>(collections.subscribers, {
+      tenantId: tenant1.id,
+      name: 'Elena Rostova',
+      email: 'elena.rostova@example.com',
+      phone: '+1 (555) 234-5678',
+      planId: plan1B.id,
+      startDate: new Date(now.getTime() - 20 * 24 * 60 * 60 * 1000).toISOString(),
+      endDate: new Date(now.getTime() + 70 * 24 * 60 * 60 * 1000).toISOString(),
+      status: 'active',
+      createdAt: nowIso,
+    });
+
+    const sub2 = await createDoc<Subscriber>(collections.subscribers, {
+      tenantId: tenant1.id,
+      name: 'Marcus Vance',
+      email: 'marcus.vance@example.com',
+      phone: '+1 (555) 876-5432',
+      planId: plan1A.id,
+      startDate: new Date(now.getTime() - 25 * 24 * 60 * 60 * 1000).toISOString(),
+      endDate: new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000).toISOString(),
+      status: 'active',
+      createdAt: nowIso,
+    });
+
+    await createDoc<Device>(collections.devices, {
       tenantId: tenant1.id,
       deviceName: 'Main Turnstile Kiosk A',
       deviceToken: 'dev_apex_kiosk_main_a109bf83',
       status: 'active',
-      lastSyncedAt: new Date(now.getTime() - 10 * 60 * 1000),
-    }).returning();
+      lastSyncedAt: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+      createdAt: nowIso,
+      pairingCode: null,
+      pairingCodeExpiresAt: null,
+    });
 
     // 3. Tenant 2: Metro Co-Working Hub
-    const [tenant2] = await db.insert(tenants).values({
+    const tenant2 = await createDoc<Tenant>(collections.tenants, {
       companyName: 'Metro Co-Working Hub',
       contactEmail: 'ops@metrohub.space',
       planTier: 'starter',
       subscriberLimit: 3,
       status: 'active',
-    }).returning();
+      createdAt: nowIso,
+    });
 
-    await db.insert(tenantAdmins).values([
-      { tenantId: tenant2.id, email: 'admin@metrohub.space', role: 'admin' },
-    ]);
+    await createDoc<TenantAdmin>(collections.tenantAdmins, {
+      tenantId: tenant2.id,
+      email: 'admin@metrohub.space',
+      role: 'admin',
+      uid: null,
+      createdAt: nowIso,
+    });
 
-    const [plan2A] = await db.insert(subscriptionPlans).values({
+    const plan2A = await createDoc<SubscriptionPlan>(collections.subscriptionPlans, {
       tenantId: tenant2.id,
       name: 'Hot Desk Monthly',
       durationDays: 30,
       price: '199.00',
-    }).returning();
+      createdAt: nowIso,
+    });
 
-    const subsT2 = await db.insert(subscribers).values([
-      {
-        tenantId: tenant2.id,
-        name: 'Jordan Hayes',
-        email: 'jordan@techstartup.io',
-        phone: '+1 (555) 111-2233',
-        planId: plan2A.id,
-        startDate: new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000),
-        endDate: new Date(now.getTime() + 20 * 24 * 60 * 60 * 1000),
-        status: 'active',
-      },
-    ]).returning();
+    const sub3 = await createDoc<Subscriber>(collections.subscribers, {
+      tenantId: tenant2.id,
+      name: 'Jordan Hayes',
+      email: 'jordan@techstartup.io',
+      phone: '+1 (555) 111-2233',
+      planId: plan2A.id,
+      startDate: new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+      endDate: new Date(now.getTime() + 20 * 24 * 60 * 60 * 1000).toISOString(),
+      status: 'active',
+      createdAt: nowIso,
+    });
 
-    const [dev2A] = await db.insert(devices).values({
+    await createDoc<Device>(collections.devices, {
       tenantId: tenant2.id,
       deviceName: 'Reception Facial Access Gate',
       deviceToken: 'dev_metro_reception_kiosk_c71a39d2',
       status: 'active',
-      lastSyncedAt: new Date(now.getTime() - 30 * 60 * 1000),
-    }).returning();
+      lastSyncedAt: new Date(now.getTime() - 30 * 60 * 1000).toISOString(),
+      createdAt: nowIso,
+      pairingCode: null,
+      pairingCodeExpiresAt: null,
+    });
 
     // 4. Seed Firestore Face Embeddings
-    for (const sub of [...subsT1, ...subsT2]) {
+    for (const sub of [sub1, sub2, sub3]) {
       await saveFaceEmbedding({
         tenantId: sub.tenantId,
         subscriberId: sub.id,
         subscriberName: sub.name,
         email: sub.email || '',
+        vector: generateSyntheticEmbedding(sub.id * 31 + sub.tenantId),
+        modelId: SYNTHETIC_MODEL_ID,
         status: sub.status === 'active' ? 'active' : 'revoked',
       });
     }
@@ -427,12 +423,6 @@ systemRouter.post('/seed', async (req: AuthenticatedRequest, res: Response) => {
       },
     });
   } catch (error: any) {
-    // Fallback seed response
-    res.json({
-      message: 'Multi-tenant data ready (in-memory mode)',
-      seeded: {
-        tenants: memoryStore.tenants,
-      },
-    });
+    res.status(500).json({ error: 'Failed to seed database', code: 'INTERNAL_ERROR', details: error.message });
   }
 });

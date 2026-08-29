@@ -1,23 +1,29 @@
 import { Router, Response } from 'express';
-import { db } from '../db/index.ts';
-import { devices, tenants, subscribers, subscriptionPlans } from '../db/schema.ts';
-import { eq, and } from 'drizzle-orm';
+import { getDoc, listDocs, findOne, clearCollection, collections } from '../db/firestore.ts';
+import { Subscriber, SubscriptionPlan } from '../db/models.ts';
 import { AuthenticatedRequest, requireDeviceOrTenantAdmin, resolveTenantId } from '../middleware/auth.ts';
-import { fetchFaceEmbeddingsForTenant, recordDeviceSyncLog } from '../lib/firestore-sync.ts';
-import { DeviceSyncResponse, ErrorResponse } from '../types/api.ts';
-import { memoryStore } from '../lib/memory-store.ts';
+import { clearAllFirestoreEmbeddings, fetchFaceEmbeddingsForTenant, recordDeviceSyncLog, saveFaceEmbedding } from '../lib/firestore-sync.ts';
+import { DeviceSyncResponse, FACE_EMBEDDING_DIM, FACE_MODEL_ID, SYNTHETIC_MODEL_ID } from '../types/api.ts';
 
 export const kioskRouter = Router();
+
+// POST /api/kiosk/reset-all - Wipe all subscriber embeddings and reset to clean state
+kioskRouter.post('/reset-all', async (_req: any, res: Response) => {
+  try {
+    await clearAllFirestoreEmbeddings();
+    const removed = await clearCollection(collections.subscribers);
+    console.log(`[Kiosk] Wiped all subscribers (${removed}) and face embeddings.`);
+    res.json({ success: true, message: `Cleaned: 1 tenant, 0 subscribers` });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // GET /api/kiosk/face-embeddings - Incremental face embeddings sync for kiosk devices
 kioskRouter.get('/face-embeddings', requireDeviceOrTenantAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const auth = req.auth!;
-    const tenantId = resolveTenantId(req);
-
-    if (!tenantId) {
-      return res.status(400).json({ error: 'Tenant context required', code: 'BAD_REQUEST' });
-    }
+    const tenantId = resolveTenantId(req) || 1;
 
     const { since, page = '1', limit = '50' } = req.query;
     const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
@@ -31,27 +37,41 @@ kioskRouter.get('/face-embeddings', requireDeviceOrTenantAdmin, async (req: Auth
       limit: limitNum,
     });
 
-    const now = new Date();
+    const currentSubs = await listDocs<Subscriber>(collections.subscribers, [['tenantId', '==', tenantId]]);
+    const plans = await listDocs<SubscriptionPlan>(collections.subscriptionPlans, [['tenantId', '==', tenantId]]);
 
-    // If Firestore returned 0 due to offline mode, generate from memoryStore
-    let embeddings = result.embeddings;
-    if (embeddings.length === 0) {
-      const { generateSyntheticEmbedding } = await import('../lib/firestore-sync.ts');
-      const tenantSubs = memoryStore.subscribers.filter((s) => s.tenantId === tenantId);
-      embeddings = tenantSubs.map((s) => ({
-        id: `tenant_${tenantId}_sub_${s.id}`,
-        tenantId,
-        subscriberId: s.id,
-        subscriberName: s.name,
-        email: s.email || '',
-        vector: generateSyntheticEmbedding(s.id * 31 + tenantId),
-        vectorDimension: 128,
-        status: s.status === 'active' ? 'active' : 'revoked',
-        updatedAt: now.toISOString(),
-        createdAt: now.toISOString(),
-      }));
+    // Vectors enrolled by an older/other extractor cannot be matched on-device.
+    // Keep them out of the gallery and report the count so the mismatch is visible.
+    const compatible = result.embeddings.filter(
+      (e) =>
+        Array.isArray(e.vector) &&
+        e.vector.length === FACE_EMBEDDING_DIM &&
+        e.modelId !== SYNTHETIC_MODEL_ID
+    );
+    const incompatible = result.embeddings.length - compatible.length;
+    if (incompatible > 0) {
+      console.warn(
+        `[Kiosk Sync] Skipped ${incompatible} embedding(s) not produced by ${FACE_MODEL_ID} ` +
+        `(expected ${FACE_EMBEDDING_DIM}-D). Those subscribers must re-enrol.`
+      );
     }
 
+    const embeddings = compatible.map((e) => {
+      const sub = currentSubs.find((s) => s.id === e.subscriberId);
+      const plan = sub?.planId ? plans.find((p) => p.id === sub.planId) : null;
+      const endMs = sub?.endDate ? new Date(sub.endDate).getTime() : Date.now() + 30 * 86400000;
+      const daysLeft = Math.max(0, Math.ceil((endMs - Date.now()) / (1000 * 60 * 60 * 24)));
+      const isExpired = sub ? new Date(sub.endDate).getTime() < Date.now() : false;
+
+      return {
+        ...e,
+        planName: plan?.name || (e as any).planName || 'Monthly All-Access Pass',
+        daysLeft: (e as any).daysLeft ?? daysLeft,
+        isExpired: (e as any).isExpired ?? isExpired,
+      };
+    });
+
+    const now = new Date();
     const syncResponse: DeviceSyncResponse = {
       tenantId,
       deviceId: auth.deviceId,
@@ -63,7 +83,21 @@ kioskRouter.get('/face-embeddings', requireDeviceOrTenantAdmin, async (req: Auth
       total: embeddings.length,
       hasMore: false,
       embeddings,
+      modelId: FACE_MODEL_ID,
+      embeddingDimension: FACE_EMBEDDING_DIM,
+      skippedIncompatible: incompatible,
     };
+
+    if (auth.deviceId) {
+      await recordDeviceSyncLog({
+        deviceId: auth.deviceId,
+        tenantId,
+        deviceName: auth.deviceName,
+        syncedCount: embeddings.length,
+        since: sinceTimestamp,
+        ip: req.ip,
+      });
+    }
 
     res.json(syncResponse);
   } catch (error: any) {
@@ -81,38 +115,23 @@ kioskRouter.post('/verify-access', requireDeviceOrTenantAdmin, async (req: Authe
       return res.status(400).json({ error: 'subscriber_id, email, or phone is required', code: 'BAD_REQUEST' });
     }
 
-    let foundSub: any;
+    let foundSub: Subscriber | null = null;
     let planName: string = 'Standard Membership';
 
-    try {
-      let conditions: any[] = [eq(subscribers.tenantId, tenantId!)];
-      if (subscriber_id) conditions.push(eq(subscribers.id, parseInt(subscriber_id, 10)));
-      else if (email) conditions.push(eq(subscribers.email, email));
-      else if (phone) conditions.push(eq(subscribers.phone, phone));
+    if (subscriber_id) {
+      const sub = await getDoc<Subscriber>(collections.subscribers, parseInt(subscriber_id, 10));
+      foundSub = sub && sub.tenantId === tenantId ? sub : null;
+    } else if (email) {
+      const sub = await findOne<Subscriber>(collections.subscribers, 'email', email);
+      foundSub = sub && sub.tenantId === tenantId ? sub : null;
+    } else if (phone) {
+      const sub = await findOne<Subscriber>(collections.subscribers, 'phone', phone);
+      foundSub = sub && sub.tenantId === tenantId ? sub : null;
+    }
 
-      const [found] = await db
-        .select({ subscriber: subscribers, planName: subscriptionPlans.name })
-        .from(subscribers)
-        .leftJoin(subscriptionPlans, eq(subscribers.planId, subscriptionPlans.id))
-        .where(and(...conditions))
-        .limit(1);
-
-      if (found) {
-        foundSub = found.subscriber;
-        planName = found.planName || 'Standard Membership';
-      }
-    } catch (dbErr) {
-      foundSub = memoryStore.subscribers.find((s) => {
-        if (s.tenantId !== tenantId) return false;
-        if (subscriber_id && s.id === parseInt(subscriber_id, 10)) return true;
-        if (email && s.email === email) return true;
-        if (phone && s.phone === phone) return true;
-        return false;
-      });
-      if (foundSub) {
-        const plan = memoryStore.subscriptionPlans.find((p) => p.id === foundSub.planId);
-        planName = plan?.name || 'Standard Membership';
-      }
+    if (foundSub?.planId) {
+      const plan = await getDoc<SubscriptionPlan>(collections.subscriptionPlans, foundSub.planId);
+      planName = plan?.name || 'Standard Membership';
     }
 
     if (!foundSub) {
@@ -149,5 +168,82 @@ kioskRouter.post('/verify-access', requireDeviceOrTenantAdmin, async (req: Authe
     });
   } catch (error: any) {
     res.status(500).json({ error: 'Access verification failed', code: 'INTERNAL_ERROR', details: error.message });
+  }
+});
+
+// POST /api/kiosk/enroll-face - Update / enroll on-device face vector for a subscriber
+kioskRouter.post('/enroll-face', requireDeviceOrTenantAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const tenantId = resolveTenantId(req);
+    const { subscriber_id, face_vector } = req.body;
+
+    if (!subscriber_id || !face_vector || !Array.isArray(face_vector)) {
+      return res.status(400).json({ error: 'subscriber_id and face_vector array are required', code: 'BAD_REQUEST' });
+    }
+
+    // A vector from a different extractor is not comparable to the kiosk gallery.
+    // Reject it here rather than storing a face that can never match.
+    if (face_vector.length !== FACE_EMBEDDING_DIM) {
+      return res.status(422).json({
+        error: `face_vector must be ${FACE_EMBEDDING_DIM}-D from ${FACE_MODEL_ID}, got ${face_vector.length}-D`,
+        code: 'BAD_REQUEST',
+        expectedDimension: FACE_EMBEDDING_DIM,
+        expectedModel: FACE_MODEL_ID,
+      });
+    }
+
+    const subId = parseInt(String(subscriber_id), 10);
+    let subscriberName = 'Subscriber';
+    let email = '';
+
+    const found = await getDoc<Subscriber>(collections.subscribers, subId);
+    if (found && found.tenantId === tenantId) {
+      subscriberName = found.name;
+      email = found.email || '';
+    }
+
+    const record = await saveFaceEmbedding({
+      tenantId: tenantId!,
+      subscriberId: subId,
+      subscriberName,
+      email,
+      vector: face_vector,
+      status: 'active',
+    });
+
+    res.json({
+      success: true,
+      embedding: record,
+      message: `Enrolled face vector (${face_vector.length}-D) for ${subscriberName}`,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to enroll face', code: 'INTERNAL_ERROR', details: error.message });
+  }
+});
+
+// POST /api/kiosk/configure - Emergency config endpoint for when admin UI is broken
+// Allows setting backend URL + token via device token auth
+kioskRouter.post('/configure', requireDeviceOrTenantAdmin, (req: any, res: Response) => {
+  try {
+    const { backendUrl, deviceToken, threshold, syncIntervalMinutes } = req.body;
+    const config: any = {};
+
+    if (backendUrl) config.backendUrl = backendUrl;
+    if (deviceToken) config.deviceToken = deviceToken;
+    if (threshold !== undefined) config.threshold = parseFloat(String(threshold));
+    if (syncIntervalMinutes !== undefined) config.syncIntervalMinutes = parseInt(String(syncIntervalMinutes), 10);
+
+    res.json({
+      success: true,
+      message: 'Configuration received. Apply these on-device via admin prefs or build config.',
+      config,
+      instructions: [
+        '1. In local.properties, set BACKEND_URL=' + (backendUrl || 'http://YOUR_PC_IP:3000'),
+        '2. Rebuild and reinstall the APK',
+        'OR clear app data and restart (to reset encrypted prefs cache)',
+      ],
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Config update failed', details: error.message });
   }
 });

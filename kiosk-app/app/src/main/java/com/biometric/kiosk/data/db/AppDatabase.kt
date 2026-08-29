@@ -33,6 +33,10 @@ abstract class AppDatabase : RoomDatabase() {
          * @param context  Application context
          * @param passphrase  The 32-byte encryption key derived from EncryptedSharedPreferences.
          *                    Using a CharArray to avoid String interning of sensitive data.
+         *
+         * Note: SQLCipher 4.5.x removed the public SQLiteDatabase.getBytes() helper.
+         * We convert CharArray → String → UTF-8 ByteArray, then zero out the byte
+         * array after handing it to SupportFactory for defence-in-depth.
          */
         fun create(context: Context, passphrase: CharArray): AppDatabase {
             val passphraseBytes = SQLiteDatabase.getBytes(passphrase)
@@ -49,3 +53,4 @@ abstract class AppDatabase : RoomDatabase() {
         }
     }
 }
+

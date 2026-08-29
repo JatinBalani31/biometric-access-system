@@ -52,6 +52,59 @@ export const TenantDetailView: React.FC<TenantDetailViewProps> = ({
   // Subscriber Search
   const [subSearch, setSubSearch] = useState('');
 
+  // Pairing Code Modal State
+  const [showPairingModal, setShowPairingModal] = useState(false);
+  const [pairingDeviceName, setPairingDeviceName] = useState('');
+  const [isGeneratingCode, setIsGeneratingCode] = useState(false);
+  const [pairingResult, setPairingResult] = useState<{ code: string; expiresAt: string } | null>(null);
+  const [pairingError, setPairingError] = useState<string | null>(null);
+  const [pairingSecondsLeft, setPairingSecondsLeft] = useState(0);
+
+  useEffect(() => {
+    if (!pairingResult) return;
+    const tick = () => {
+      const remaining = Math.max(0, Math.floor((new Date(pairingResult.expiresAt).getTime() - Date.now()) / 1000));
+      setPairingSecondsLeft(remaining);
+    };
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [pairingResult]);
+
+  const handleGeneratePairingCode = async () => {
+    if (!pairingDeviceName.trim()) {
+      setPairingError('Enter a name for this kiosk (e.g. "Front Desk Turnstile").');
+      return;
+    }
+    setIsGeneratingCode(true);
+    setPairingError(null);
+    try {
+      const res = await fetch('/api/devices/generate-pairing-code', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-simulated-role': 'company_admin',
+        },
+        body: JSON.stringify({ tenant_id: tenantId, device_name: pairingDeviceName.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to generate pairing code');
+      setPairingResult({ code: data.pairingCode, expiresAt: data.expiresAt });
+    } catch (err: any) {
+      setPairingError(err.message);
+    } finally {
+      setIsGeneratingCode(false);
+    }
+  };
+
+  const closePairingModal = () => {
+    setShowPairingModal(false);
+    setPairingDeviceName('');
+    setPairingResult(null);
+    setPairingError(null);
+    fetchTenantDetails();
+  };
+
   const fetchTenantDetails = async () => {
     try {
       setLoading(true);
@@ -489,12 +542,21 @@ export const TenantDetailView: React.FC<TenantDetailViewProps> = ({
       {/* Tab 2: Devices & Sync Health */}
       {activeTab === 'devices' && (
         <div className="space-y-4">
+          <div className="flex justify-end">
+            <button
+              onClick={() => setShowPairingModal(true)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold rounded-xl transition"
+            >
+              <HardDrive className="w-4 h-4" /> Add Kiosk Device
+            </button>
+          </div>
           <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
             <table className="w-full text-left text-xs sm:text-sm">
               <thead className="bg-slate-950/60 border-b border-slate-800 text-slate-400 uppercase tracking-wider text-[11px] font-semibold">
                 <tr>
                   <th className="py-3.5 px-4 sm:px-6">Device Name</th>
                   <th className="py-3.5 px-4">Device Token Preview</th>
+                  <th className="py-3.5 px-4">Status</th>
                   <th className="py-3.5 px-4">Biometric Sync Health</th>
                   <th className="py-3.5 px-4 sm:px-6">Last Sync Timestamp</th>
                 </tr>
@@ -502,7 +564,7 @@ export const TenantDetailView: React.FC<TenantDetailViewProps> = ({
               <tbody className="divide-y divide-slate-800/60">
                 {!tenant.devices || tenant.devices.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="py-10 text-center text-slate-500 text-xs">
+                    <td colSpan={5} className="py-10 text-center text-slate-500 text-xs">
                       No kiosk devices registered for this tenant.
                     </td>
                   </tr>
@@ -517,6 +579,7 @@ export const TenantDetailView: React.FC<TenantDetailViewProps> = ({
                         : health === 'stale'
                         ? 'bg-rose-500/10 border-rose-500/20 text-rose-400'
                         : 'bg-slate-800 border-slate-700 text-slate-500';
+                    const isPending = dev.status === 'pending';
 
                     return (
                       <tr key={dev.id} className="hover:bg-slate-800/30 transition-colors">
@@ -528,6 +591,17 @@ export const TenantDetailView: React.FC<TenantDetailViewProps> = ({
                         </td>
                         <td className="py-4 px-4 font-mono text-xs text-indigo-300">
                           {dev.deviceToken?.substring(0, 16)}...
+                        </td>
+                        <td className="py-4 px-4">
+                          <span
+                            className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${
+                              isPending
+                                ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                            }`}
+                          >
+                            {isPending ? 'Awaiting Pairing' : 'Active'}
+                          </span>
                         </td>
                         <td className="py-4 px-4">
                           <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${badgeColor}`}>
@@ -640,6 +714,84 @@ export const TenantDetailView: React.FC<TenantDetailViewProps> = ({
                 {isUpdatingStatus ? 'Updating...' : isSuspended ? 'Confirm Reactivation' : 'Confirm Suspension'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Kiosk Device / Pairing Code Modal */}
+      {showPairingModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-700/60 rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-5">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl border bg-indigo-500/10 border-indigo-500/30 text-indigo-400">
+                <HardDrive className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-white font-semibold text-base">Add Kiosk Device</h3>
+                <p className="text-slate-400 text-xs mt-1">
+                  {pairingResult
+                    ? 'Enter this code on the kiosk\'s pairing screen. It expires in 10 minutes.'
+                    : 'Generate a one-time pairing code — no manual device token entry needed on the kiosk.'}
+                </p>
+              </div>
+            </div>
+
+            {!pairingResult ? (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5">Kiosk Name</label>
+                  <input
+                    type="text"
+                    value={pairingDeviceName}
+                    onChange={(e) => setPairingDeviceName(e.target.value)}
+                    placeholder="e.g. Front Desk Turnstile"
+                    className="w-full px-4 py-3 bg-slate-950/60 border border-slate-700 focus:border-indigo-500 text-white text-sm rounded-xl outline-none transition placeholder:text-slate-600"
+                  />
+                </div>
+                {pairingError && (
+                  <div className="p-3 bg-rose-950/60 border border-rose-800/60 rounded-xl text-rose-300 text-xs">
+                    {pairingError}
+                  </div>
+                )}
+                <div className="flex items-center justify-end gap-2.5">
+                  <button
+                    type="button"
+                    onClick={closePairingModal}
+                    className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleGeneratePairingCode}
+                    disabled={isGeneratingCode}
+                    className="px-4 py-2 rounded-xl text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 shadow-lg shadow-indigo-600/20 disabled:opacity-50"
+                  >
+                    {isGeneratingCode ? 'Generating...' : 'Generate Pairing Code'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="bg-slate-950/60 border border-indigo-500/30 rounded-2xl py-8 flex flex-col items-center gap-2">
+                  <div className="text-4xl font-mono font-bold text-white tracking-[0.3em]">{pairingResult.code}</div>
+                  <div className="text-xs text-slate-500">
+                    {pairingSecondsLeft > 0
+                      ? `Expires in ${Math.floor(pairingSecondsLeft / 60)}:${String(pairingSecondsLeft % 60).padStart(2, '0')}`
+                      : 'Code expired — generate a new one'}
+                  </div>
+                </div>
+                <div className="flex items-center justify-end">
+                  <button
+                    type="button"
+                    onClick={closePairingModal}
+                    className="px-5 py-2.5 rounded-xl text-xs font-semibold text-white bg-slate-800 hover:bg-slate-700 border border-slate-700"
+                  >
+                    Done
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

@@ -10,9 +10,11 @@ firebase-debug.log*
 firestore-debug.log*
 ui-debug.log*
 
-# Diagnostic reports & dumps
+# Diagnostic reports & memory dumps
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 *.hprof
+**/*.hprof
+*.dump
 
 # Runtime data
 pids
@@ -31,6 +33,7 @@ jspm_packages/
 dist/
 dist-ssr/
 build/
+**/build/
 coverage/
 *.local
 
@@ -43,6 +46,7 @@ coverage/
 !.env.example
 *service-account*.json
 *serviceAccountKey*.json
+*serviceAccount*.json
 
 # Firebase & Emulators
 .firebase/
@@ -51,14 +55,16 @@ dataconnect-emulator-*.zip
 
 # Android / Gradle
 .gradle/
-**/build/
+**/.gradle/
 kiosk-app/.gradle/
 kiosk-app/**/build/
 kiosk-app/local.properties
+**/local.properties
 *.apk
 *.aab
 *.aar
 .cxx/
+**/.cxx/
 captures/
 
 # IDE & Editor configs
@@ -66,7 +72,10 @@ captures/
 !.vscode/extensions.json
 !.vscode/settings.json
 .idea/
+**/.idea/
+.claude/
 *.iml
+**/*.iml
 *.suo
 *.ntvs*
 *.njsproj
@@ -81,3 +90,7 @@ captures/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Vercel
+.vercel/
+.vercel

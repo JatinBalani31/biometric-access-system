@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 
 import { CompanyControlPanel } from './components/admin/CompanyControlPanel.tsx';
+import { RegistrationPortal } from './components/RegistrationPortal.tsx';
 
 interface SystemSummary {
   status: string;
@@ -42,6 +43,11 @@ interface SystemSummary {
 }
 
 export default function App() {
+  // Route: /register → show public self-registration portal
+  if (window.location.pathname === '/register') {
+    return <RegistrationPortal />;
+  }
+
   const [viewMode, setViewMode] = useState<'control_panel' | 'dev_portal'>('control_panel');
   const [activeTab, setActiveTab] = useState<'infrastructure' | 'tenants' | 'subscribers' | 'kiosk' | 'api'>('infrastructure');
   const [systemSummary, setSystemSummary] = useState<SystemSummary | null>(null);
@@ -312,6 +318,17 @@ export default function App() {
               <Shield className="w-3.5 h-3.5" />
               <span>Company Control Panel</span>
             </button>
+
+            {/* Register Member shortcut */}
+            <a
+              href="/register"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-xs font-semibold shadow-md shadow-violet-600/30 transition-all"
+            >
+              <Fingerprint className="w-3.5 h-3.5" />
+              <span>Register Member</span>
+            </a>
 
             {/* Live Stack Badges */}
             <div className="hidden md:flex items-center gap-2 text-xs">

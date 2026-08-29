@@ -9,7 +9,7 @@ val localProps = Properties().also { props ->
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.kapt)
+    alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
     alias(libs.plugins.google.services)
 }
@@ -68,6 +68,7 @@ android {
     }
 }
 
+
 dependencies {
     // Core
     implementation(libs.core.ktx)
@@ -103,13 +104,13 @@ dependencies {
     implementation(libs.room.ktx)
     implementation(libs.sqlcipher)
     implementation(libs.sqlite.ktx)
-    kapt(libs.room.compiler)
+    ksp(libs.room.compiler)
 
     // Hilt
     implementation(libs.hilt.android)
     implementation(libs.hilt.work)
-    kapt(libs.hilt.compiler)
-    kapt(libs.hilt.work.compiler)
+    ksp(libs.hilt.compiler)
+    ksp(libs.hilt.work.compiler)
 
     // WorkManager
     implementation(libs.workmanager.ktx)
@@ -119,7 +120,7 @@ dependencies {
     implementation(libs.retrofit.moshi)
     implementation(libs.okhttp.logging)
     implementation(libs.moshi.kotlin)
-    kapt(libs.moshi.codegen)
+    ksp(libs.moshi.codegen)
 
     // Firebase
     implementation(platform(libs.firebase.bom))
@@ -129,6 +130,4 @@ dependencies {
     implementation(libs.security.crypto)
 }
 
-kapt {
-    correctErrorTypes = true
-}
+

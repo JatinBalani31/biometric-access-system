@@ -1,5 +1,4 @@
 package com.biometric.kiosk.ml
-
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
@@ -20,12 +19,17 @@ import kotlin.math.sqrt
 /**
  * TFLite MobileFaceNet inference wrapper.
  *
- * Input:  160×160 RGB face crop, normalized to [-1.0, 1.0]
- * Output: 128-dimensional L2-normalized face embedding vector
+ * Input:  112×112 RGB face crop, normalized to [-1.0, 1.0] via (x - 127.5) / 128
+ * Output: 192-dimensional L2-normalized face embedding vector
+ *
+ * Crops must be eye-aligned by [FaceAligner] first — MobileFaceNet is trained on
+ * canonically aligned faces and loses meaningful accuracy on raw detector boxes.
+ *
+ * This contract is mirrored exactly by the web enrolment path in
+ * src/lib/face-embedding.ts, which loads the same .tflite file. Embeddings are
+ * only comparable between identical extractors, so the two must never diverge.
  *
  * The model file (mobilefacenet.tflite) must be placed in app/src/main/assets/.
- * Download from: https://github.com/sirius-ai/MobileFaceNet_TF or
- * the MediaPipe FaceNet model on TF Hub (converted to TFLite).
  *
  * GPU acceleration is used when available (CompatibilityList check).
  * Falls back gracefully to CPU if GPU delegate is not supported.
@@ -36,22 +40,23 @@ class FaceEmbedder @Inject constructor(
 ) {
     companion object {
         private const val MODEL_FILENAME = "mobilefacenet.tflite"
-        private const val INPUT_SIZE = 160          // MobileFaceNet expects 160×160
-        private const val EMBEDDING_SIZE = 128       // Output dimension
-        private const val FLOAT_SIZE = 4             // bytes per float
+        private const val DEFAULT_INPUT_SIZE = 112
+        private const val DEFAULT_EMBEDDING_SIZE = 192
+        private const val FLOAT_SIZE = 4
         private const val IMAGE_MEAN = 127.5f
         private const val IMAGE_STD = 128.0f
     }
 
     private var interpreter: Interpreter? = null
     private var gpuDelegate: GpuDelegate? = null
+    private var inputSize: Int = DEFAULT_INPUT_SIZE
+    private var embeddingSize: Int = DEFAULT_EMBEDDING_SIZE
 
     init {
         try {
             setupInterpreter()
         } catch (e: IOException) {
             android.util.Log.e("FaceEmbedder", "Failed to load TFLite model: ${e.message}")
-            // App will work in degraded mode — face matching won't work until model loads
         }
     }
 
@@ -59,61 +64,84 @@ class FaceEmbedder @Inject constructor(
         val model = loadModelFile()
         val options = Interpreter.Options()
 
-        // Prefer GPU acceleration for faster inference on mid-range tablets
         val compatList = CompatibilityList()
         if (compatList.isDelegateSupportedOnThisDevice) {
             gpuDelegate = GpuDelegate(compatList.bestOptionsForThisDevice)
             options.addDelegate(gpuDelegate!!)
             android.util.Log.i("FaceEmbedder", "GPU delegate enabled")
         } else {
-            options.numThreads = 4  // Use 4 threads for CPU inference
+            options.numThreads = 4
             android.util.Log.i("FaceEmbedder", "Using CPU inference with 4 threads")
         }
 
-        interpreter = Interpreter(model, options)
+        val interp = Interpreter(model, options)
+        try {
+            val inTensor = interp.getInputTensor(0)
+            val outTensor = interp.getOutputTensor(0)
+            val inShape = inTensor.shape()
+            val outShape = outTensor.shape()
+
+            inputSize = when {
+                inShape.size >= 4 -> inShape[1].takeIf { it > 0 } ?: DEFAULT_INPUT_SIZE
+                inShape.size >= 2 -> inShape[1].takeIf { it > 0 } ?: DEFAULT_INPUT_SIZE
+                else -> DEFAULT_INPUT_SIZE
+            }
+
+            var prod = 1
+            for (i in 1 until outShape.size) {
+                if (outShape[i] > 0) prod *= outShape[i]
+            }
+            embeddingSize = if (prod in 32..2048) prod else DEFAULT_EMBEDDING_SIZE
+
+            android.util.Log.i("FaceEmbedder", "Model initialized: inShape=${inShape.contentToString()}, outShape=${outShape.contentToString()}, inputSize=$inputSize, embeddingSize=$embeddingSize")
+
+            if (inputSize != DEFAULT_INPUT_SIZE || embeddingSize != DEFAULT_EMBEDDING_SIZE) {
+                android.util.Log.e(
+                    "FaceEmbedder",
+                    "MODEL CONTRACT MISMATCH: $MODEL_FILENAME is ${inputSize}px/${embeddingSize}-D but " +
+                        "enrolment produces ${DEFAULT_INPUT_SIZE}px/${DEFAULT_EMBEDDING_SIZE}-D. " +
+                        "All subscribers must be re-enrolled with the matching model."
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("FaceEmbedder", "Could not inspect tensor shapes: ${e.message}")
+        }
+        interpreter = interp
     }
 
     /**
-     * Generate a 128-dimensional L2-normalized face embedding from a bitmap face crop.
-     *
-     * @param faceBitmap  The face region crop (any size — resized internally to 160×160)
-     * @return  FloatArray of size 128, L2-normalized, or null if the model isn't ready
+     * Generate L2-normalized face embedding from a bitmap face crop.
      */
     fun embed(faceBitmap: Bitmap): FloatArray? {
         val interp = interpreter ?: return null
 
-        // 1. Resize and normalize the face crop to model input format
         val inputBuffer = preprocessBitmap(faceBitmap)
+        val outputBuffer = Array(1) { FloatArray(embeddingSize) }
 
-        // 2. Allocate output buffer: [1, 128] float32 array
-        val outputBuffer = Array(1) { FloatArray(EMBEDDING_SIZE) }
-
-        // 3. Run TFLite inference
         interp.run(inputBuffer, outputBuffer)
 
-        // 4. Extract embedding and L2-normalize it
         val embedding = outputBuffer[0]
         return l2Normalize(embedding)
     }
 
     /**
-     * Converts a Bitmap to a ByteBuffer suitable for TFLite input.
+     * Converts a Bitmap to a ByteBuffer suitable for facenet.tflite input.
      * Applies center-crop resize and normalizes pixels from [0,255] to [-1.0, 1.0].
      */
     private fun preprocessBitmap(bitmap: Bitmap): ByteBuffer {
-        val resized = resizeBitmap(bitmap, INPUT_SIZE, INPUT_SIZE)
+        val resized = resizeBitmap(bitmap, inputSize, inputSize)
 
-        val buffer = ByteBuffer.allocateDirect(1 * INPUT_SIZE * INPUT_SIZE * 3 * FLOAT_SIZE)
+        val buffer = ByteBuffer.allocateDirect(1 * inputSize * inputSize * 3 * FLOAT_SIZE)
         buffer.order(ByteOrder.nativeOrder())
 
-        val pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
-        resized.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
+        val pixels = IntArray(inputSize * inputSize)
+        resized.getPixels(pixels, 0, inputSize, 0, 0, inputSize, inputSize)
 
         for (pixel in pixels) {
             val r = ((pixel shr 16) and 0xFF)
             val g = ((pixel shr 8) and 0xFF)
             val b = (pixel and 0xFF)
-            // Normalize to [-1.0, 1.0]
+            // Normalize to [-1.0, 1.0] (FaceNet standard)
             buffer.putFloat((r - IMAGE_MEAN) / IMAGE_STD)
             buffer.putFloat((g - IMAGE_MEAN) / IMAGE_STD)
             buffer.putFloat((b - IMAGE_MEAN) / IMAGE_STD)

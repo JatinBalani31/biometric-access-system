@@ -18,13 +18,18 @@ class AdminActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityAdminBinding.inflate(layoutInflater)
-        setContentView(binding.root)
+        try {
+            binding = ActivityAdminBinding.inflate(layoutInflater)
+            setContentView(binding.root)
 
-        setupToolbar()
-        loadSettings()
-        setupListeners()
-        observeViewModel()
+            setupToolbar()
+            loadSettings()
+            setupListeners()
+            observeViewModel()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Admin error: ${e.message}", Toast.LENGTH_LONG).show()
+            finish()
+        }
     }
 
     private fun setupToolbar() {
@@ -32,6 +37,9 @@ class AdminActivity : AppCompatActivity() {
         supportActionBar?.apply {
             title = "⚙ Admin Settings"
             setDisplayHomeAsUpEnabled(true)
+        }
+        binding.toolbar.setNavigationOnClickListener {
+            finish()
         }
     }
 
@@ -49,7 +57,7 @@ class AdminActivity : AppCompatActivity() {
             binding.sliderThreshold.value = settings.threshold * 100f
             binding.tvThresholdValue.text = "%.2f".format(settings.threshold)
             binding.sliderSyncInterval.value = settings.syncIntervalMinutes.toFloat()
-            binding.tvSyncIntervalValue.text = "${settings.syncIntervalMinutes} min"
+            binding.tvSyncIntervalValue.text = formatInterval(settings.syncIntervalMinutes)
         }
 
         viewModel.syncStatus.observe(this) { status ->
@@ -72,7 +80,7 @@ class AdminActivity : AppCompatActivity() {
 
         // Sync interval slider
         binding.sliderSyncInterval.addOnChangeListener { _, value, _ ->
-            binding.tvSyncIntervalValue.text = "${value.toInt()} min"
+            binding.tvSyncIntervalValue.text = formatInterval(value.toInt())
         }
 
         // Save button
@@ -94,9 +102,10 @@ class AdminActivity : AppCompatActivity() {
 
         // Force sync button
         binding.btnForceSync.setOnClickListener {
+            viewModel.triggerFullResync()
             EmbeddingSyncWorker.runImmediateSync(this)
-            Toast.makeText(this, "Sync started...", Toast.LENGTH_SHORT).show()
-            binding.tvSyncResult.text = "Sync enqueued — check back in a moment"
+            Toast.makeText(this, "Clean full sync started...", Toast.LENGTH_SHORT).show()
+            binding.tvSyncResult.text = "Syncing fresh embeddings from server..."
             binding.tvSyncResult.visibility = View.VISIBLE
         }
 
@@ -143,5 +152,12 @@ class AdminActivity : AppCompatActivity() {
     override fun onSupportNavigateUp(): Boolean {
         finish()
         return true
+    }
+
+    private fun formatInterval(minutes: Int): String {
+        if (minutes < 60) return "$minutes min"
+        val hours = minutes / 60
+        val rem = minutes % 60
+        return if (rem == 0) "$hours h" else "${hours}h ${rem}m"
     }
 }

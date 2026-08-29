@@ -4,11 +4,8 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.graphics.Rect
-import android.graphics.YuvImage
 import android.os.Bundle
 import android.view.MotionEvent
 import android.view.View
@@ -24,6 +21,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.biometric.kiosk.R
 import com.biometric.kiosk.data.db.EmbeddingEntity
+import com.biometric.kiosk.data.prefs.DevicePrefs
+import com.biometric.kiosk.ml.FaceAligner
 import com.biometric.kiosk.databinding.ActivityScannerBinding
 import com.biometric.kiosk.sync.EmbeddingSyncWorker
 import com.biometric.kiosk.ui.admin.AdminActivity
@@ -34,15 +33,18 @@ import com.google.mlkit.vision.face.FaceDetector
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
-import java.io.ByteArrayOutputStream
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class ScannerActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityScannerBinding
     private val viewModel: ScannerViewModel by viewModels()
+
+    @Inject
+    lateinit var devicePrefs: DevicePrefs
 
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var faceDetector: FaceDetector
@@ -61,6 +63,14 @@ class ScannerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Unpaired kiosk — send it to the pairing screen instead of starting the scanner.
+        if (!devicePrefs.isRegistered || devicePrefs.deviceToken.isBlank()) {
+            startActivity(Intent(this, com.biometric.kiosk.ui.pairing.PairingActivity::class.java))
+            finish()
+            return
+        }
+
         binding = ActivityScannerBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -79,9 +89,13 @@ class ScannerActivity : AppCompatActivity() {
         }
 
         // ── Configure ML Kit Face Detector ────────────────────────────────────
+        // Landmarks are required: FaceAligner uses the two eye centres to map each
+        // face onto the canonical 112x112 crop MobileFaceNet expects. Without them
+        // the network sees an unaligned, arbitrarily-rolled box and accuracy drops
+        // sharply.
         val options = FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
+            .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
             .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
             .setMinFaceSize(0.20f)   // Minimum face size: 20% of shorter image dimension
             .enableTracking()
@@ -90,9 +104,11 @@ class ScannerActivity : AppCompatActivity() {
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
-        // ── Trigger immediate sync on launch ──────────────────────────────────
+        // ── Trigger immediate sync on launch, then fall back to the admin-configured
+        // interval (defaults to once a day — the kiosk matches from its local cache
+        // offline between syncs, so it only needs connectivity briefly). ─────────────
         EmbeddingSyncWorker.runImmediateSync(this)
-        EmbeddingSyncWorker.schedulePeriodicSync(this, intervalMinutes = 15)
+        EmbeddingSyncWorker.schedulePeriodicSync(this, intervalMinutes = devicePrefs.syncIntervalMinutes)
 
         // ── Observe scanner state ─────────────────────────────────────────────
         viewModel.state.observe(this) { state ->
@@ -109,6 +125,9 @@ class ScannerActivity : AppCompatActivity() {
                 }
                 is ScannerViewModel.ScannerState.SyncRequired -> {
                     updateStatusText("⏳ Loading subscriber data...")
+                }
+                is ScannerViewModel.ScannerState.IncompatibleGallery -> {
+                    updateStatusText("⚠ Cached faces were enrolled with a different model — re-enrol required")
                 }
             }
         }
@@ -132,6 +151,19 @@ class ScannerActivity : AppCompatActivity() {
         } else {
             requestPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
+
+        // ── Direct Admin Gear Button Click ────────────────────────────────────
+        binding.btnAdminGear.setOnClickListener {
+            showAdminPinDialog()
+        }
+
+        // ── Tap to Sync directly from screen ──────────────────────────────────
+        val syncListener = View.OnClickListener {
+            EmbeddingSyncWorker.runImmediateSync(this)
+            Toast.makeText(this, "⟳ Syncing subscribers with server...", Toast.LENGTH_SHORT).show()
+        }
+        binding.statusBar.setOnClickListener(syncListener)
+        binding.tvCachedCount.setOnClickListener(syncListener)
 
         // ── Triple-tap corner gesture on the top-right corner overlay ─────────
         binding.adminTapTarget.setOnClickListener {
@@ -197,8 +229,28 @@ class ScannerActivity : AppCompatActivity() {
                 if (faces.isNotEmpty()) {
                     // Use the largest face (closest to camera)
                     val face = faces.maxByOrNull { it.boundingBox.width() * it.boundingBox.height() }!!
-                    val bitmap = imageProxy.toBitmap()
-                    val faceCrop = cropFace(bitmap, face.boundingBox, rotationDegrees)
+
+                    // Skip frames the network cannot do anything useful with. The next
+                    // frame is ~30ms away, so rejecting is cheaper than a bad embedding.
+                    if (!FaceAligner.isGoodQuality(face)) {
+                        updateStatusText("Look straight at the camera")
+                        return@addOnSuccessListener
+                    }
+
+                    val bitmap = try {
+                        // CameraX's own converter — handles YUV row/pixel strides correctly.
+                        imageProxy.toBitmap()
+                    } catch (e: Exception) {
+                        android.util.Log.w("ScannerActivity", "Frame conversion failed: ${e.message}")
+                        return@addOnSuccessListener
+                    }
+                    val upright = rotateBitmap(bitmap, rotationDegrees)
+
+                    // ML Kit reports landmarks in the rotated (upright) frame, which is
+                    // the same space `upright` is in — so they can be used directly.
+                    val faceCrop = FaceAligner.align(upright, face)
+                    if (upright != bitmap) upright.recycle()
+
                     viewModel.processFace(faceCrop)
                 }
             }
@@ -210,24 +262,15 @@ class ScannerActivity : AppCompatActivity() {
             }
     }
 
-    private fun cropFace(bitmap: Bitmap, boundingBox: Rect, rotationDegrees: Int): Bitmap {
-        // Rotate bitmap to match display orientation
+    /**
+     * Rotate the analysis frame upright so it shares a coordinate space with the
+     * bounding box and landmarks ML Kit reported for the rotated InputImage.
+     * Cropping and alignment are handled by [FaceAligner].
+     */
+    private fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
+        if (rotationDegrees == 0) return bitmap
         val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
-        val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, false)
-
-        // Scale bounding box coordinates to match rotated bitmap
-        val isRotated = rotationDegrees == 90 || rotationDegrees == 270
-        val scaleX = rotated.width.toFloat() / (if (isRotated) bitmap.height else bitmap.width)
-        val scaleY = rotated.height.toFloat() / (if (isRotated) bitmap.width else bitmap.height)
-
-        val left = (boundingBox.left * scaleX).toInt().coerceIn(0, rotated.width - 1)
-        val top = (boundingBox.top * scaleY).toInt().coerceIn(0, rotated.height - 1)
-        val width = (boundingBox.width() * scaleX).toInt().coerceIn(1, rotated.width - left)
-        val height = (boundingBox.height() * scaleY).toInt().coerceIn(1, rotated.height - top)
-
-        val crop = Bitmap.createBitmap(rotated, left, top, width, height)
-        if (rotated != bitmap) rotated.recycle()
-        return crop
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
     // ── UI Helpers ─────────────────────────────────────────────────────────────
@@ -277,7 +320,13 @@ class ScannerActivity : AppCompatActivity() {
     }
 
     override fun onBackPressed() {
-        // Swallow back button in kiosk mode
+        // Stop lock-task / screen-pinning mode, then fully exit
+        try {
+            stopLockTask()
+        } catch (e: Exception) {
+            android.util.Log.w("ScannerActivity", "stopLockTask failed: ${e.message}")
+        }
+        finishAffinity()
     }
 
     override fun onDestroy() {
@@ -286,21 +335,6 @@ class ScannerActivity : AppCompatActivity() {
         faceDetector.close()
     }
 }
-
-// ── Helper Extension: ImageProxy → Bitmap ─────────────────────────────────────
-
-@OptIn(ExperimentalGetImage::class)
-private fun ImageProxy.toBitmap(): Bitmap {
-    val yBuffer = planes[0].buffer
-    val vuBuffer = planes[2].buffer
-    val ySize = yBuffer.remaining()
-    val vuSize = vuBuffer.remaining()
-    val nv21 = ByteArray(ySize + vuSize)
-    yBuffer.get(nv21, 0, ySize)
-    vuBuffer.get(nv21, ySize, vuSize)
-    val yuvImage = YuvImage(nv21, ImageFormat.NV21, this.width, this.height, null)
-    val out = ByteArrayOutputStream()
-    yuvImage.compressToJpeg(Rect(0, 0, this.width, this.height), 90, out)
-    val imageBytes = out.toByteArray()
-    return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-}
+// The hand-rolled ImageProxy.toBitmap() extension that used to live here ignored
+// plane row/pixel strides and was shadowed by CameraX's own member function
+// anyway. ImageProxy.toBitmap() from camera-core is used directly instead.

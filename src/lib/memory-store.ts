@@ -1,62 +1,31 @@
-import { generateSyntheticEmbedding } from './firestore-sync.ts';
-
-export interface InMemoryStore {
-  tenants: any[];
-  tenantAdmins: any[];
-  subscriptionPlans: any[];
-  subscribers: any[];
-  devices: any[];
-  companyAdmins: any[];
-  auditLogs: any[];
-}
+import {
+  CompanyAdmin,
+  Tenant,
+  TenantAdmin,
+  SubscriptionPlan,
+  Subscriber,
+  KioskDevice,
+  AccessLog,
+  AuditLogRecord,
+  VerificationRequest,
+  VerificationResult,
+} from '../types/api.ts';
 
 const now = new Date();
 
-export const memoryStore: InMemoryStore = {
-  auditLogs: [
-    {
-      id: 1,
-      actorEmail: 'superadmin@platform.io',
-      actorRole: 'company_admin',
-      action: 'TENANT_CREATED',
-      tenantId: 1,
-      tenantName: 'Apex Health & Fitness',
-      targetType: 'tenant',
-      targetId: '1',
-      previousState: null,
-      newState: JSON.stringify({ companyName: 'Apex Health & Fitness', planTier: 'pro', subscriberLimit: 100 }),
-      ipAddress: '127.0.0.1',
-      createdAt: new Date(now.getTime() - 48 * 60 * 60 * 1000),
-    },
-    {
-      id: 2,
-      actorEmail: 'superadmin@platform.io',
-      actorRole: 'company_admin',
-      action: 'TENANT_CREATED',
-      tenantId: 2,
-      tenantName: 'Metro Co-Working Hub',
-      targetType: 'tenant',
-      targetId: '2',
-      previousState: null,
-      newState: JSON.stringify({ companyName: 'Metro Co-Working Hub', planTier: 'starter', subscriberLimit: 3 }),
-      ipAddress: '127.0.0.1',
-      createdAt: new Date(now.getTime() - 24 * 60 * 60 * 1000),
-    },
-    {
-      id: 3,
-      actorEmail: 'superadmin@platform.io',
-      actorRole: 'company_admin',
-      action: 'TENANT_STATUS_UPDATED',
-      tenantId: 3,
-      tenantName: 'Titan Corporate Gym',
-      targetType: 'tenant',
-      targetId: '3',
-      previousState: JSON.stringify({ status: 'active' }),
-      newState: JSON.stringify({ status: 'suspended', reason: 'Billing delinquency' }),
-      ipAddress: '127.0.0.1',
-      createdAt: new Date(now.getTime() - 12 * 60 * 60 * 1000),
-    },
-  ],
+export interface MemoryStore {
+  companyAdmins: CompanyAdmin[];
+  tenants: Tenant[];
+  tenantAdmins: TenantAdmin[];
+  subscriptionPlans: SubscriptionPlan[];
+  subscribers: Subscriber[];
+  kioskDevices: KioskDevice[];
+  devices: KioskDevice[];
+  accessLogs: AccessLog[];
+  auditLogs: AuditLogRecord[];
+}
+
+export const memoryStore: MemoryStore = {
   companyAdmins: [
     {
       id: 1,
@@ -75,108 +44,28 @@ export const memoryStore: InMemoryStore = {
       status: 'active',
       createdAt: now,
     },
-    {
-      id: 2,
-      companyName: 'Metro Co-Working Hub',
-      contactEmail: 'ops@metrohub.space',
-      planTier: 'starter',
-      subscriberLimit: 3, // Tight limit for testing 422 LIMIT_EXCEEDED!
-      status: 'active',
-      createdAt: now,
-    },
-    {
-      id: 3,
-      companyName: 'Titan Corporate Gym',
-      contactEmail: 'billing@titanfitness.com',
-      planTier: 'starter',
-      subscriberLimit: 50,
-      status: 'suspended', // Suspended tenant
-      createdAt: now,
-    },
   ],
   tenantAdmins: [
     { id: 1, tenantId: 1, email: 'admin@apexfitness.com', role: 'admin', createdAt: now },
-    { id: 2, tenantId: 1, email: 'manager@apexfitness.com', role: 'manager', createdAt: now },
-    { id: 3, tenantId: 2, email: 'admin@metrohub.space', role: 'admin', createdAt: now },
-    { id: 4, tenantId: 3, email: 'admin@titanfitness.com', role: 'admin', createdAt: now },
   ],
   subscriptionPlans: [
     { id: 1, tenantId: 1, name: 'Monthly All-Access Pass', durationDays: 30, price: '59.00', createdAt: now },
     { id: 2, tenantId: 1, name: 'Quarterly VIP Pass', durationDays: 90, price: '149.00', createdAt: now },
     { id: 3, tenantId: 1, name: 'Annual Elite Pass', durationDays: 365, price: '499.00', createdAt: now },
-    { id: 4, tenantId: 2, name: 'Hot Desk Monthly', durationDays: 30, price: '199.00', createdAt: now },
   ],
-  subscribers: [
+  // Clean slate: 0 subscribers
+  subscribers: [],
+  kioskDevices: [
     {
       id: 1,
       tenantId: 1,
-      name: 'Elena Rostova',
-      email: 'elena.rostova@example.com',
-      phone: '+1 (555) 234-5678',
-      planId: 2,
-      startDate: new Date(now.getTime() - 20 * 24 * 60 * 60 * 1000),
-      endDate: new Date(now.getTime() + 70 * 24 * 60 * 60 * 1000),
-      status: 'active',
-      createdAt: now,
-    },
-    {
-      id: 2,
-      tenantId: 1,
-      name: 'Marcus Vance',
-      email: 'marcus.vance@example.com',
-      phone: '+1 (555) 876-5432',
-      planId: 1,
-      startDate: new Date(now.getTime() - 25 * 24 * 60 * 60 * 1000),
-      endDate: new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000),
-      status: 'active',
-      createdAt: now,
-    },
-    {
-      id: 3,
-      tenantId: 1,
-      name: 'David Miller',
-      email: 'david.miller@example.com',
-      phone: '+1 (555) 654-3210',
-      planId: 1,
-      startDate: new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000),
-      endDate: new Date(now.getTime() - 15 * 24 * 60 * 60 * 1000), // Expired
-      status: 'expired',
-      createdAt: now,
-    },
-    {
-      id: 4,
-      tenantId: 2,
-      name: 'Jordan Hayes',
-      email: 'jordan@techstartup.io',
-      phone: '+1 (555) 111-2233',
-      planId: 4,
-      startDate: new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000),
-      endDate: new Date(now.getTime() + 20 * 24 * 60 * 60 * 1000),
-      status: 'active',
-      createdAt: now,
-    },
-    {
-      id: 5,
-      tenantId: 2,
-      name: 'Amara Okafor',
-      email: 'amara@designstudio.co',
-      phone: '+1 (555) 444-5566',
-      planId: 4,
-      startDate: new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000),
-      endDate: new Date(now.getTime() + 25 * 24 * 60 * 60 * 1000),
-      status: 'active',
-      createdAt: now,
-    },
-    {
-      id: 6,
-      tenantId: 2,
-      name: 'Liam Gallagher',
-      email: 'liam@freelance.org',
-      phone: '+1 (555) 777-8899',
-      planId: 4,
-      startDate: new Date(now.getTime() - 28 * 24 * 60 * 60 * 1000),
-      endDate: new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000),
-      status: 'active',
+      deviceName: 'Apex Main Entrance Kiosk',
+      deviceToken: 'dev_apex_kiosk_main_a109bf83',
+      location: 'Turnstile A1 - Reception',
+      lastHeartbeat: now,
+      status: 'online',
+      firmwareVersion: '1.2.0',
+      syncedEmbeddingCount: 0,
       createdAt: now,
     },
   ],
@@ -184,38 +73,55 @@ export const memoryStore: InMemoryStore = {
     {
       id: 1,
       tenantId: 1,
-      deviceName: 'Main Turnstile Kiosk A',
+      deviceName: 'Apex Main Entrance Kiosk',
       deviceToken: 'dev_apex_kiosk_main_a109bf83',
-      status: 'active',
-      lastSyncedAt: new Date(now.getTime() - 10 * 60 * 1000),
-      createdAt: now,
-    },
-    {
-      id: 2,
-      tenantId: 1,
-      deviceName: 'VIP Studio Gate B',
-      deviceToken: 'dev_apex_gate_vip_b8849ef1',
-      status: 'active',
-      lastSyncedAt: new Date(now.getTime() - 60 * 60 * 1000),
-      createdAt: now,
-    },
-    {
-      id: 3,
-      tenantId: 2,
-      deviceName: 'Reception Facial Access Gate',
-      deviceToken: 'dev_metro_reception_kiosk_c71a39d2',
-      status: 'active',
-      lastSyncedAt: new Date(now.getTime() - 30 * 60 * 1000),
-      createdAt: now,
-    },
-    {
-      id: 4,
-      tenantId: 3,
-      deviceName: 'Basement Entry Kiosk',
-      deviceToken: 'dev_titan_basement_d438fa90',
-      status: 'active',
-      lastSyncedAt: null,
+      location: 'Turnstile A1 - Reception',
+      lastHeartbeat: now,
+      status: 'online',
+      firmwareVersion: '1.2.0',
+      syncedEmbeddingCount: 0,
       createdAt: now,
     },
   ],
+  accessLogs: [],
+  auditLogs: [],
 };
+
+// In-memory helper methods
+export function findSubscriberById(id: number): Subscriber | undefined {
+  return memoryStore.subscribers.find((s) => s.id === id);
+}
+
+export function findTenantById(id: number): Tenant | undefined {
+  return memoryStore.tenants.find((t) => t.id === id);
+}
+
+export function findKioskDeviceByToken(token: string): KioskDevice | undefined {
+  return memoryStore.kioskDevices.find((d) => d.deviceToken === token);
+}
+
+export function getTenantSubscribers(tenantId: number): Subscriber[] {
+  return memoryStore.subscribers.filter((s) => s.tenantId === tenantId);
+}
+
+export function getTenantPlans(tenantId: number): SubscriptionPlan[] {
+  return memoryStore.subscriptionPlans.filter((p) => p.tenantId === tenantId);
+}
+
+export function getTenantDevices(tenantId: number): KioskDevice[] {
+  return memoryStore.kioskDevices.filter((d) => d.tenantId === tenantId);
+}
+
+export function getTenantLogs(tenantId: number): AccessLog[] {
+  return memoryStore.accessLogs.filter((l) => l.tenantId === tenantId);
+}
+
+/**
+ * Reset memoryStore to fresh state with 1 single tenant and 0 subscribers.
+ */
+export function resetMemoryStore(): void {
+  memoryStore.subscribers = [];
+  memoryStore.accessLogs = [];
+  memoryStore.auditLogs = [];
+  console.log('[MemoryStore] Reset to clean slate: 1 tenant, 0 subscribers.');
+}

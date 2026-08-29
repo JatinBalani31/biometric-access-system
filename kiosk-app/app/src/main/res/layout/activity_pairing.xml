@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="@color/scanner_bg"
+    android:padding="32dp">
+
+    <ImageView
+        android:layout_width="64dp"
+        android:layout_height="64dp"
+        android:src="@drawable/ic_checkmark_circle"
+        android:contentDescription="@null"
+        app:tint="@color/md_theme_primary"
+        android:layout_marginBottom="20dp" />
+
+    <TextView
+        android:id="@+id/tv_pairing_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Pair This Kiosk"
+        android:textSize="26sp"
+        android:textStyle="bold"
+        android:textColor="@color/white"
+        android:fontFamily="sans-serif-black" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="28dp"
+        android:text="Enter the 6-digit code shown in the admin panel\n(Kiosk Fleet &amp; Sync → Add Kiosk Device)"
+        android:textSize="14sp"
+        android:textColor="@color/white_70"
+        android:textAlignment="center"
+        android:lineSpacingExtra="4dp" />
+
+    <com.google.android.material.textfield.TextInputLayout
+        android:id="@+id/til_pairing_code"
+        android:layout_width="260dp"
+        android:layout_height="wrap_content"
+        android:hint="Pairing Code"
+        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox">
+
+        <com.google.android.material.textfield.TextInputEditText
+            android:id="@+id/et_pairing_code"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:inputType="number"
+            android:maxLength="6"
+            android:gravity="center"
+            android:textSize="28sp"
+            android:letterSpacing="0.4"
+            android:fontFamily="monospace" />
+
+    </com.google.android.material.textfield.TextInputLayout>
+
+    <TextView
+        android:id="@+id/tv_pairing_error"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:textColor="@color/denied_bg_solid"
+        android:textSize="13sp"
+        android:textAlignment="center"
+        android:visibility="gone" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btn_pair"
+        android:layout_width="260dp"
+        android:layout_height="56dp"
+        android:layout_marginTop="24dp"
+        android:text="Pair Device"
+        android:textSize="16sp" />
+
+    <ProgressBar
+        android:id="@+id/progress_pairing"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/tv_manual_setup"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="32dp"
+        android:text="Set up manually instead"
+        android:textColor="@color/white_40"
+        android:textSize="13sp"
+        android:padding="8dp" />
+
+</LinearLayout>
