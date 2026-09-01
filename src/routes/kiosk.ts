@@ -1,19 +1,44 @@
 import { Router, Response } from 'express';
 import { getDoc, listDocs, findOne, clearCollection, collections } from '../db/firestore.ts';
 import { Subscriber, SubscriptionPlan } from '../db/models.ts';
-import { AuthenticatedRequest, requireDeviceOrTenantAdmin, resolveTenantId } from '../middleware/auth.ts';
+import { AuthenticatedRequest, requireCompanyAdmin, requireDeviceOrTenantAdmin, resolveTenantId } from '../middleware/auth.ts';
 import { clearAllFirestoreEmbeddings, fetchFaceEmbeddingsForTenant, recordDeviceSyncLog, saveFaceEmbedding } from '../lib/firestore-sync.ts';
+import { logAuditAction } from '../lib/audit-logger.ts';
 import { DeviceSyncResponse, FACE_EMBEDDING_DIM, FACE_MODEL_ID, SYNTHETIC_MODEL_ID } from '../types/api.ts';
 
 export const kioskRouter = Router();
 
-// POST /api/kiosk/reset-all - Wipe all subscriber embeddings and reset to clean state
-kioskRouter.post('/reset-all', async (_req: any, res: Response) => {
+// POST /api/kiosk/reset-all - Wipe all subscriber embeddings and reset to clean state.
+// Destroys biometric data across every tenant, so it is company_admin only and must
+// echo back the exact confirmation phrase — a stray call should never be able to
+// empty the database.
+kioskRouter.post('/reset-all', requireCompanyAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
+    if (req.body?.confirm !== 'DELETE ALL BIOMETRIC DATA') {
+      return res.status(400).json({
+        error: 'Destructive operation requires { "confirm": "DELETE ALL BIOMETRIC DATA" } in the body.',
+        code: 'CONFIRMATION_REQUIRED',
+      });
+    }
+
     await clearAllFirestoreEmbeddings();
-    const removed = await clearCollection(collections.subscribers);
-    console.log(`[Kiosk] Wiped all subscribers (${removed}) and face embeddings.`);
-    res.json({ success: true, message: `Cleaned: 1 tenant, 0 subscribers` });
+    const subscribersRemoved = await clearCollection(collections.subscribers);
+
+    await logAuditAction({
+      actorEmail: req.auth?.email ?? 'unknown',
+      actorRole: 'company_admin',
+      action: 'PURGE_ALL_BIOMETRIC_DATA',
+      targetType: 'system',
+      newState: { subscribersRemoved },
+      ipAddress: req.ip,
+    });
+
+    console.warn(`[Kiosk] PURGE by ${req.auth?.email}: ${subscribersRemoved} subscribers, embeddings wiped.`);
+    res.json({
+      success: true,
+      subscribersRemoved,
+      message: `Purged ${subscribersRemoved} subscriber(s) and all face embeddings.`,
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

@@ -1,3 +1,4 @@
+import { api } from '../../lib/api-client.ts';
 import React, { useState, useEffect } from 'react';
 import {
   History,
@@ -22,13 +23,8 @@ export const AuditLogView: React.FC = () => {
     try {
       setLoading(true);
       const url = actionFilter !== 'all' ? `/api/system/audit-logs?action=${actionFilter}` : '/api/system/audit-logs';
-      const res = await fetch(url, {
-        headers: { 'x-simulated-role': 'company_admin' },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setLogs(data.logs || []);
-      }
+      const data = await api.get(url);
+      setLogs(data.logs || []);
     } catch (err) {
       console.warn('Failed to fetch audit logs:', err);
     } finally {

@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import crypto from 'crypto';
 import { createDoc, getDoc, updateDoc, listDocs, collections } from '../db/firestore.ts';
 import { Tenant, TenantAdmin, Subscriber, Device, SubscriptionPlan, AuditLog } from '../db/models.ts';
 import { AuthenticatedRequest, requireCompanyAdmin, requireTenantAdminOrCompany } from '../middleware/auth.ts';
@@ -150,7 +151,9 @@ tenantsRouter.post('/', requireCompanyAdmin, async (req: AuthenticatedRequest, r
     }
 
     const assignedAdminEmail = admin_email || contact_email;
-    const inviteToken = `inv_${Math.random().toString(36).substring(2, 10)}_${Date.now().toString(36)}`;
+    // An invite token grants tenant-admin access, so it needs real entropy.
+    // Math.random() is seeded predictably and would let an attacker guess pending invites.
+    const inviteToken = `inv_${crypto.randomBytes(24).toString('base64url')}`;
     const inviteUrl = `https://platform.io/invite/tenant?token=${inviteToken}&email=${encodeURIComponent(assignedAdminEmail)}`;
 
     const newTenant = await createDoc<Tenant>(collections.tenants, {

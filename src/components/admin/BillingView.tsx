@@ -1,3 +1,4 @@
+import { api } from '../../lib/api-client.ts';
 import React, { useState, useEffect } from 'react';
 import {
   DollarSign,
@@ -26,13 +27,7 @@ export const BillingView: React.FC<BillingViewProps> = ({ onSelectTenant }) => {
   const fetchBilling = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/system/billing', {
-        headers: { 'x-simulated-role': 'company_admin' },
-      });
-      if (res.ok) {
-        const json = await res.json();
-        setData(json);
-      }
+      setData(await api.get('/api/system/billing'));
     } catch (err) {
       console.warn('Billing fetch error:', err);
     } finally {

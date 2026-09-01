@@ -1,10 +1,29 @@
 import React, { useState } from 'react';
 import { Shield, Lock, Mail, Key, Sparkles, CheckCircle2, AlertTriangle, ArrowRight } from 'lucide-react';
 import { auth, googleAuthProvider } from '../../lib/firebase.ts';
+import { api } from '../../lib/api-client.ts';
 import { signInWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
 
 interface LoginViewProps {
   onLoginSuccess: (user: { email: string; role: string; token?: string }) => void;
+}
+
+/**
+ * Reads the role from the token's custom claims, falling back to asking the API
+ * who it thinks we are. The server is the authority either way — this only picks
+ * the screen to render, and a wrong answer here cannot unlock any data.
+ */
+async function resolveRole(claims: Record<string, any>): Promise<string | null> {
+  const claimed = claims.role ?? (claims.company_admin === true ? 'company_admin' : null);
+  if (claimed === 'company_admin' || claimed === 'tenant_admin') return claimed;
+
+  try {
+    const health = await api.get('/api/health');
+    const role = health?.caller?.role;
+    return role === 'company_admin' || role === 'tenant_admin' ? role : null;
+  } catch {
+    return null;
+  }
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
@@ -27,19 +46,21 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       const userCred = await signInWithEmailAndPassword(auth, email, password);
       const idTokenResult = await userCred.user.getIdTokenResult(true);
 
-      // Verify company_admin role / claim
-      const claims = idTokenResult.claims;
-      const isCompanyAdmin = claims.company_admin === true || claims.role === 'company_admin' || email.includes('superadmin') || email.endsWith('@platform.io');
+      // The role must come from a signed custom claim. Matching on the email string
+      // ("superadmin", "@platform.io") let anyone who could register such an address
+      // walk into the panel. The server verifies the same claim independently, so this
+      // check only decides which screen to show.
+      const role = await resolveRole(idTokenResult.claims);
 
-      if (!isCompanyAdmin) {
-        setError('Access Denied: This portal requires verified company_admin privileges.');
+      if (!role) {
+        setError('Access denied: this account has no admin role assigned.');
         setLoading(false);
         return;
       }
 
       onLoginSuccess({
         email: userCred.user.email || email,
-        role: 'company_admin',
+        role,
         token: idTokenResult.token,
       });
     } catch (err: any) {
@@ -58,18 +79,17 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       const userCred = await signInWithPopup(auth, googleAuthProvider);
       const idTokenResult = await userCred.user.getIdTokenResult(true);
 
-      const claims = idTokenResult.claims;
-      const isCompanyAdmin = claims.company_admin === true || claims.role === 'company_admin' || userCred.user.email?.endsWith('@platform.io');
+      const role = await resolveRole(idTokenResult.claims);
 
-      if (!isCompanyAdmin) {
-        setError('Access Denied: Your Google account lacks company_admin permissions.');
+      if (!role) {
+        setError('Access denied: this Google account has no admin role assigned.');
         setLoading(false);
         return;
       }
 
       onLoginSuccess({
-        email: userCred.user.email || 'company_admin@platform.io',
-        role: 'company_admin',
+        email: userCred.user.email || '',
+        role,
         token: idTokenResult.token,
       });
     } catch (err: any) {
@@ -171,26 +191,31 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
             </button>
           </form>
 
-          {/* Divider */}
-          <div className="relative my-6 text-center">
-            <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-slate-800" />
-            </div>
-            <span className="relative px-3 bg-slate-900 text-[11px] font-medium uppercase tracking-wider text-slate-500">
-              Or instant testing
-            </span>
-          </div>
+          {/* The unauthenticated one-click superadmin sign-in that used to sit here
+              handed full platform access to anyone who loaded this page. It is now
+              available only when the local sandbox flag is on. */}
+          {import.meta.env.DEV && (
+            <>
+              <div className="relative my-6 text-center">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-slate-800" />
+                </div>
+                <span className="relative px-3 bg-slate-900 text-[11px] font-medium uppercase tracking-wider text-slate-500">
+                  Local development only
+                </span>
+              </div>
 
-          {/* Demo 1-Click Sign-In */}
-          <button
-            type="button"
-            onClick={handleDevSandboxLogin}
-            disabled={loading}
-            className="w-full py-2.5 px-4 rounded-xl bg-slate-800/80 hover:bg-slate-800 border border-indigo-500/30 text-indigo-300 hover:text-indigo-200 text-xs font-semibold flex items-center justify-center gap-2.5 transition-all cursor-pointer shadow-md group"
-          >
-            <Sparkles className="w-4 h-4 text-indigo-400 group-hover:rotate-12 transition-transform" />
-            <span>1-Click Sign In (superadmin@platform.io)</span>
-          </button>
+              <button
+                type="button"
+                onClick={handleDevSandboxLogin}
+                disabled={loading}
+                className="w-full py-2.5 px-4 rounded-xl bg-slate-800/80 hover:bg-slate-800 border border-amber-500/30 text-amber-300 hover:text-amber-200 text-xs font-semibold flex items-center justify-center gap-2.5 transition-all cursor-pointer shadow-md group"
+              >
+                <Sparkles className="w-4 h-4 text-amber-400 group-hover:rotate-12 transition-transform" />
+                <span>Dev sandbox sign-in</span>
+              </button>
+            </>
+          )}
         </div>
 
         {/* Security Footer Note */}

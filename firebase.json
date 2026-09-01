@@ -11,9 +11,16 @@
   },
   "hosting": {
     "public": "dist",
+    "predeploy": ["npm run build"],
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
-      { "source": "/api/**", "function": "api" },
+      {
+        "source": "/api/**",
+        "function": {
+          "functionId": "api",
+          "region": "us-central1"
+        }
+      },
       { "source": "**", "destination": "/index.html" }
     ]
   }

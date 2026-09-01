@@ -264,8 +264,15 @@ export default function App() {
     }
   };
 
-  if (viewMode === 'control_panel') {
-    return <CompanyControlPanel onSwitchToDevPortal={() => setViewMode('dev_portal')} />;
+  // The dev portal below (role switcher, API workbench, kiosk simulator, seed button)
+  // drives the API with simulated-role headers, which a deployed server refuses. It is
+  // a local tool, so it is only reachable in a development build.
+  if (viewMode === 'control_panel' || !import.meta.env.DEV) {
+    return (
+      <CompanyControlPanel
+        onSwitchToDevPortal={import.meta.env.DEV ? () => setViewMode('dev_portal') : undefined}
+      />
+    );
   }
 
   const currentTenant = tenantsList.find((t) => t.id === selectedTenantId) || tenantsList[0];

@@ -4,7 +4,17 @@ import { NewAuditLog } from '../db/models.ts';
 export interface AuditLogPayload {
   actorEmail: string;
   actorRole?: string;
-  action: 'TENANT_CREATED' | 'TENANT_LIMIT_UPDATED' | 'TENANT_PLAN_UPDATED' | 'TENANT_STATUS_UPDATED' | 'ADMIN_INVITED' | 'DEVICE_REGISTERED' | 'DEVICE_REVOKED';
+  action:
+    | 'TENANT_CREATED'
+    | 'TENANT_LIMIT_UPDATED'
+    | 'TENANT_PLAN_UPDATED'
+    | 'TENANT_STATUS_UPDATED'
+    | 'ADMIN_INVITED'
+    | 'DEVICE_REGISTERED'
+    | 'DEVICE_REVOKED'
+    | 'DEVICE_PAIRED'
+    | 'SUBSCRIBER_REGISTERED'
+    | 'PURGE_ALL_BIOMETRIC_DATA';
   tenantId?: number | null;
   tenantName?: string | null;
   targetType?: string;

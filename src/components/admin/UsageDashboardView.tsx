@@ -1,3 +1,4 @@
+import { api } from '../../lib/api-client.ts';
 import React, { useState, useEffect } from 'react';
 import {
   Activity,
@@ -27,13 +28,7 @@ export const UsageDashboardView: React.FC<UsageDashboardViewProps> = ({ onSelect
   const fetchAnalytics = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/system/usage-analytics?stale_days=${staleDays}`, {
-        headers: { 'x-simulated-role': 'company_admin' },
-      });
-      if (res.ok) {
-        const json = await res.json();
-        setData(json);
-      }
+      setData(await api.get(`/api/system/usage-analytics?stale_days=${staleDays}`));
     } catch (err) {
       console.warn('Analytics fetch error:', err);
     } finally {

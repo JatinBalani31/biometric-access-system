@@ -305,12 +305,16 @@ export function RegistrationPortal() {
   // ─── Field-level validation ──────────────────────────────────────────────
   const NAME_PATTERN = /^[A-Za-z][A-Za-z .'-]{1,79}$/;
   const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const PHONE_PATTERN = /^[+]?[\d][\d\s-]{6,17}$/;
+  // Indian mobile numbers: 10 digits, first digit 6-9. The +91 is fixed in the UI,
+  // so only the national number is ever typed or validated here.
+  const INDIAN_MOBILE_PATTERN = /^[6-9]\d{9}$/;
 
   const validateName = (value: string): string | undefined => {
     const trimmed = value.trim();
     if (!trimmed) return 'Full name is required.';
     if (trimmed.length < 2) return 'Name must be at least 2 characters.';
+    if (trimmed.length > 80) return 'Name must be 80 characters or fewer.';
+    if (!/[A-Za-z]{2}/.test(trimmed)) return 'Enter your real name — at least two letters.';
     if (!NAME_PATTERN.test(trimmed)) return 'Name can only contain letters, spaces, hyphens, and apostrophes.';
     return undefined;
   };
@@ -318,16 +322,29 @@ export function RegistrationPortal() {
   const validateEmail = (value: string): string | undefined => {
     const trimmed = value.trim();
     if (!trimmed) return undefined; // optional
-    if (!EMAIL_PATTERN.test(trimmed)) return 'Enter a valid email address (e.g. name@example.com).';
+    if (trimmed.length > 254) return 'Email address is too long.';
+    if (!EMAIL_PATTERN.test(trimmed)) return 'Enter a valid email address.';
     return undefined;
   };
 
   const validatePhone = (value: string): string | undefined => {
-    const trimmed = value.trim();
-    if (!trimmed) return undefined; // optional
-    if (!PHONE_PATTERN.test(trimmed)) return 'Enter a valid phone number (7-18 digits, optional + prefix).';
+    const digits = value.replace(/\D/g, '');
+    if (!digits) return undefined; // optional
+    if (digits.length < 10) return `Enter all 10 digits — ${10 - digits.length} more to go.`;
+    if (digits.length > 10) return 'An Indian mobile number is exactly 10 digits.';
+    if (!INDIAN_MOBILE_PATTERN.test(digits)) return 'Indian mobile numbers start with 6, 7, 8, or 9.';
     return undefined;
   };
+
+  // Keep only digits, capped at 10, so the field can never hold an invalid shape.
+  const handlePhoneChange = (raw: string) => {
+    const digits = raw.replace(/\D/g, '').slice(0, 10);
+    setPhone(digits);
+    if (fieldErrors.phone) setFieldErrors((p) => ({ ...p, phone: undefined }));
+  };
+
+  // Display as "98765 43210" while storing the bare digits.
+  const formattedPhone = phone.length > 5 ? `${phone.slice(0, 5)} ${phone.slice(5)}` : phone;
 
   const handleNameBlur = () => setFieldErrors((prev) => ({ ...prev, name: validateName(name) }));
   const handleEmailBlur = () => setFieldErrors((prev) => ({ ...prev, email: validateEmail(email) }));
@@ -398,7 +415,8 @@ export function RegistrationPortal() {
           tenant_id: selectedTenantId,
           name: name.trim(),
           email: email.trim() || undefined,
-          phone: phone.trim() || undefined,
+          // Store E.164 so the kiosk and admin lookups have one canonical form.
+          phone: phone ? `+91${phone}` : undefined,
           plan_id: selectedPlanId || undefined,
           face_vector: vector,
         }),
@@ -588,7 +606,9 @@ export function RegistrationPortal() {
                         value={name}
                         onChange={(e) => { setName(e.target.value); if (fieldErrors.name) setFieldErrors((p) => ({ ...p, name: undefined })); }}
                         onBlur={handleNameBlur}
-                        placeholder="e.g. Jatin Balani"
+                        placeholder="Your full name"
+                        maxLength={80}
+                        autoComplete="name"
                         aria-invalid={!!fieldErrors.name}
                         className={`w-full pl-10 pr-4 py-3 bg-slate-900/80 border text-white text-sm rounded-xl outline-none transition placeholder:text-slate-600 ${
                           fieldErrors.name
@@ -609,7 +629,9 @@ export function RegistrationPortal() {
                         value={email}
                         onChange={(e) => { setEmail(e.target.value); if (fieldErrors.email) setFieldErrors((p) => ({ ...p, email: undefined })); }}
                         onBlur={handleEmailBlur}
-                        placeholder="you@example.com"
+                        placeholder="Your email address"
+                        maxLength={254}
+                        autoComplete="email"
                         aria-invalid={!!fieldErrors.email}
                         className={`w-full pl-10 pr-4 py-3 bg-slate-900/80 border text-white text-sm rounded-xl outline-none transition placeholder:text-slate-600 ${
                           fieldErrors.email
@@ -622,24 +644,43 @@ export function RegistrationPortal() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5">Phone Number</label>
-                    <div className="relative">
-                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                    <label htmlFor="reg-phone" className="block text-xs font-medium text-slate-400 mb-1.5">Mobile Number</label>
+                    <div
+                      className={`flex items-stretch bg-slate-900/80 border rounded-xl overflow-hidden transition ${
+                        fieldErrors.phone
+                          ? 'border-rose-500/70 focus-within:border-rose-500 focus-within:ring-1 focus-within:ring-rose-500/30'
+                          : 'border-slate-700 hover:border-slate-600 focus-within:border-violet-500 focus-within:ring-1 focus-within:ring-violet-500/30'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5 px-3 bg-slate-800/70 border-r border-slate-700 text-slate-300 text-sm font-medium select-none shrink-0">
+                        <Phone className="w-4 h-4 text-slate-500" />
+                        +91
+                      </span>
                       <input
+                        id="reg-phone"
                         type="tel"
-                        value={phone}
-                        onChange={(e) => { setPhone(e.target.value); if (fieldErrors.phone) setFieldErrors((p) => ({ ...p, phone: undefined })); }}
+                        inputMode="numeric"
+                        autoComplete="tel-national"
+                        maxLength={11}
+                        value={formattedPhone}
+                        onChange={(e) => handlePhoneChange(e.target.value)}
                         onBlur={handlePhoneBlur}
-                        placeholder="+91 98765 43210"
+                        placeholder="10-digit mobile number"
                         aria-invalid={!!fieldErrors.phone}
-                        className={`w-full pl-10 pr-4 py-3 bg-slate-900/80 border text-white text-sm rounded-xl outline-none transition placeholder:text-slate-600 ${
-                          fieldErrors.phone
-                            ? 'border-rose-500/70 focus:border-rose-500 focus:ring-1 focus:ring-rose-500/30'
-                            : 'border-slate-700 hover:border-slate-600 focus:border-violet-500 focus:ring-1 focus:ring-violet-500/30'
-                        }`}
+                        aria-describedby={fieldErrors.phone ? 'reg-phone-error' : undefined}
+                        className="flex-1 min-w-0 px-3 py-3 bg-transparent text-white text-sm outline-none placeholder:text-slate-600 tracking-wide"
                       />
+                      {phone.length === 10 && !fieldErrors.phone && (
+                        <span className="flex items-center pr-3">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        </span>
+                      )}
                     </div>
-                    {fieldErrors.phone && <p className="mt-1.5 text-xs text-rose-400">{fieldErrors.phone}</p>}
+                    {fieldErrors.phone ? (
+                      <p id="reg-phone-error" className="mt-1.5 text-xs text-rose-400">{fieldErrors.phone}</p>
+                    ) : (
+                      <p className="mt-1.5 text-xs text-slate-600">Used to look you up at the front desk.</p>
+                    )}
                   </div>
                 </div>
 

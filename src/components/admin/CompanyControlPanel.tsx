@@ -1,3 +1,4 @@
+import { api } from '../../lib/api-client.ts';
 import React, { useState, useEffect } from 'react';
 import {
   Shield,
@@ -58,13 +59,7 @@ export const CompanyControlPanel: React.FC<CompanyControlPanelProps> = ({
   const fetchTenants = async () => {
     try {
       setLoadingTenants(true);
-      const res = await fetch('/api/tenants', {
-        headers: { 'x-simulated-role': 'company_admin' },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTenants(data);
-      }
+      setTenants(await api.get('/api/tenants'));
     } catch (err: any) {
       showToast('Failed to load tenants list', 'error');
     } finally {
@@ -91,30 +86,18 @@ export const CompanyControlPanel: React.FC<CompanyControlPanelProps> = ({
 
     try {
       setIsSubmittingStatus(true);
-      const res = await fetch(`/api/tenants/${quickStatusModal.tenantId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-simulated-role': 'company_admin',
-        },
-        body: JSON.stringify({
-          status: nextStatus,
-          reason: statusReason || undefined,
-        }),
+      await api.patch(`/api/tenants/${quickStatusModal.tenantId}`, {
+        status: nextStatus,
+        reason: statusReason || undefined,
       });
 
-      if (res.ok) {
-        showToast(
-          `Tenant "${quickStatusModal.companyName}" ${nextStatus === 'suspended' ? 'suspended' : 'reactivated'} successfully`,
-          nextStatus === 'suspended' ? 'error' : 'success'
-        );
-        setQuickStatusModal(null);
-        setStatusReason('');
-        fetchTenants();
-      } else {
-        const data = await res.json();
-        showToast(data.error || 'Failed to update tenant status', 'error');
-      }
+      showToast(
+        `Tenant "${quickStatusModal.companyName}" ${nextStatus === 'suspended' ? 'suspended' : 'reactivated'} successfully`,
+        nextStatus === 'suspended' ? 'error' : 'success'
+      );
+      setQuickStatusModal(null);
+      setStatusReason('');
+      fetchTenants();
     } catch (err: any) {
       showToast(err.message, 'error');
     } finally {

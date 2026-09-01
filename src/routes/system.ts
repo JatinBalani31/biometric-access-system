@@ -239,9 +239,18 @@ systemRouter.get('/audit-logs', async (req: AuthenticatedRequest, res: Response)
   }
 });
 
-// POST /api/system/seed - Seed multi-tenant demo data
-systemRouter.post('/seed', async (req: AuthenticatedRequest, res: Response) => {
+// POST /api/system/seed - Seed multi-tenant demo data.
+// With ?force=true this truncates every collection, so it is company_admin only and
+// refuses to run outside a sandbox: demo records must never reach a real deployment.
+systemRouter.post('/seed', requireCompanyAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
+    if (process.env.ALLOW_DEMO_SEED !== 'true') {
+      return res.status(403).json({
+        error: 'Demo seeding is disabled. Set ALLOW_DEMO_SEED=true in a non-production environment to enable it.',
+        code: 'SEED_DISABLED',
+      });
+    }
+
     // Check if tenants exist
     const existingTenants = await listDocs<Tenant>(collections.tenants);
     if (existingTenants.length > 0 && req.query.force !== 'true') {

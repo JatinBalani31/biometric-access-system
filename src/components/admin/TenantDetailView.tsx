@@ -1,3 +1,4 @@
+import { api } from '../../lib/api-client.ts';
 import React, { useState, useEffect } from 'react';
 import {
   ArrowLeft,
@@ -79,16 +80,10 @@ export const TenantDetailView: React.FC<TenantDetailViewProps> = ({
     setIsGeneratingCode(true);
     setPairingError(null);
     try {
-      const res = await fetch('/api/devices/generate-pairing-code', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-simulated-role': 'company_admin',
-        },
-        body: JSON.stringify({ tenant_id: tenantId, device_name: pairingDeviceName.trim() }),
+      const data = await api.post('/api/devices/generate-pairing-code', {
+        tenant_id: tenantId,
+        device_name: pairingDeviceName.trim(),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to generate pairing code');
       setPairingResult({ code: data.pairingCode, expiresAt: data.expiresAt });
     } catch (err: any) {
       setPairingError(err.message);
@@ -108,17 +103,10 @@ export const TenantDetailView: React.FC<TenantDetailViewProps> = ({
   const fetchTenantDetails = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/tenants/${tenantId}`, {
-        headers: { 'x-simulated-role': 'company_admin' },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTenant(data);
-        setNewLimit(data.subscriberLimit || 100);
-        setNewTier(data.planTier || 'starter');
-      } else {
-        onShowToast('Failed to load tenant details', 'error');
-      }
+      const data = await api.get(`/api/tenants/${tenantId}`);
+      setTenant(data);
+      setNewLimit(data.subscriberLimit || 100);
+      setNewTier(data.planTier || 'starter');
     } catch (err: any) {
       onShowToast(err.message, 'error');
     } finally {
@@ -139,25 +127,10 @@ export const TenantDetailView: React.FC<TenantDetailViewProps> = ({
 
     try {
       setIsUpdatingLimit(true);
-      const res = await fetch(`/api/tenants/${tenantId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-simulated-role': 'company_admin',
-        },
-        body: JSON.stringify({
-          subscriber_limit: newLimit,
-        }),
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        onShowToast(`Subscriber limit updated to ${newLimit} (logged to audit_logs)`, 'success');
-        setIsEditingLimit(false);
-        fetchTenantDetails();
-      } else {
-        onShowToast(data.error || 'Failed to update limit', 'error');
-      }
+      await api.patch(`/api/tenants/${tenantId}`, { subscriber_limit: newLimit });
+      onShowToast(`Subscriber limit updated to ${newLimit} (logged to audit_logs)`, 'success');
+      setIsEditingLimit(false);
+      fetchTenantDetails();
     } catch (err: any) {
       onShowToast(err.message, 'error');
     } finally {
@@ -169,25 +142,10 @@ export const TenantDetailView: React.FC<TenantDetailViewProps> = ({
   const handleSaveTier = async () => {
     try {
       setIsUpdatingTier(true);
-      const res = await fetch(`/api/tenants/${tenantId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-simulated-role': 'company_admin',
-        },
-        body: JSON.stringify({
-          plan_tier: newTier,
-        }),
-      });
-
-      const data = await res.json();
-      if (res.ok) {
-        onShowToast(`Plan tier updated to ${newTier.toUpperCase()} (logged to audit_logs)`, 'success');
-        setIsEditingTier(false);
-        fetchTenantDetails();
-      } else {
-        onShowToast(data.error || 'Failed to update tier', 'error');
-      }
+      await api.patch(`/api/tenants/${tenantId}`, { plan_tier: newTier });
+      onShowToast(`Plan tier updated to ${newTier.toUpperCase()} (logged to audit_logs)`, 'success');
+      setIsEditingTier(false);
+      fetchTenantDetails();
     } catch (err: any) {
       onShowToast(err.message, 'error');
     } finally {
@@ -200,30 +158,18 @@ export const TenantDetailView: React.FC<TenantDetailViewProps> = ({
     const nextStatus = tenant?.status === 'suspended' ? 'active' : 'suspended';
     try {
       setIsUpdatingStatus(true);
-      const res = await fetch(`/api/tenants/${tenantId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-simulated-role': 'company_admin',
-        },
-        body: JSON.stringify({
-          status: nextStatus,
-          reason: statusReason || undefined,
-        }),
+      await api.patch(`/api/tenants/${tenantId}`, {
+        status: nextStatus,
+        reason: statusReason || undefined,
       });
 
-      const data = await res.json();
-      if (res.ok) {
-        onShowToast(
-          `Tenant ${nextStatus === 'suspended' ? 'Suspended (Access locked)' : 'Reactivated (Access restored)'}`,
-          nextStatus === 'suspended' ? 'error' : 'success'
-        );
-        setShowStatusModal(false);
-        setStatusReason('');
-        fetchTenantDetails();
-      } else {
-        onShowToast(data.error || 'Failed to update status', 'error');
-      }
+      onShowToast(
+        `Tenant ${nextStatus === 'suspended' ? 'Suspended (Access locked)' : 'Reactivated (Access restored)'}`,
+        nextStatus === 'suspended' ? 'error' : 'success'
+      );
+      setShowStatusModal(false);
+      setStatusReason('');
+      fetchTenantDetails();
     } catch (err: any) {
       onShowToast(err.message, 'error');
     } finally {

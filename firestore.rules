@@ -1,48 +1,66 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Helper function to check if request is authenticated
+
+    // The API reaches Firestore through the Admin SDK, which bypasses these rules
+    // entirely — every rule below governs direct client-SDK access from a browser
+    // or the kiosk app. Default deny: any collection without an explicit match
+    // (subscribers, tenants, devices, audit_logs, _counters) is unreachable from a
+    // client and can only be touched by the authenticated API.
+
     function isAuthenticated() {
       return request.auth != null;
     }
-    
-    // Helper to check if request is coming from specific tenant admin
+
+    function callerTenant() {
+      return request.auth.token.tenantId;
+    }
+
+    function isCompanyAdmin() {
+      return isAuthenticated() && request.auth.token.role == 'company_admin';
+    }
+
     function isTenantAdmin(tenantId) {
-      return isAuthenticated() && (
-        request.auth.token.role == 'company_admin' ||
-        (request.auth.token.role == 'tenant_admin' && request.auth.token.tenantId == tenantId)
-      );
+      return isCompanyAdmin() ||
+        (isAuthenticated() && request.auth.token.role == 'tenant_admin' && callerTenant() == tenantId);
     }
 
-    // Helper to check if request is from verified kiosk device
     function isAuthorizedDevice(tenantId) {
-      return isAuthenticated() && (
-        request.auth.token.role == 'company_admin' ||
-        (request.auth.token.role == 'device' && request.auth.token.tenantId == tenantId)
-      );
+      return isCompanyAdmin() ||
+        (isAuthenticated() && request.auth.token.role == 'device' && callerTenant() == tenantId);
     }
 
-    // 1. Face Embeddings Collection
-    // Format: tenant_{tenantId}_sub_{subscriberId}
+    // 1. Face embeddings — biometric data. Readable only within the owning tenant,
+    //    writable only by that tenant's admins.
     match /face_embeddings/{docId} {
       allow read: if isAuthenticated() && (
-        resource.data.tenantId == request.auth.token.tenantId ||
-        request.auth.token.role == 'company_admin'
+        isCompanyAdmin() || resource.data.tenantId == callerTenant()
       );
-      allow write: if isTenantAdmin(request.resource.data.tenantId);
+      allow create, update: if isTenantAdmin(request.resource.data.tenantId);
+      // Deleting an enrolment is an audited server-side action, never a client one.
+      allow delete: if false;
     }
 
-    // 2. Sync Status Collection
+    // 2. Sync status — a device may only write its own tenant's row, and the
+    //    tenantId must not change on update.
     match /sync_status/{docId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow read: if isAuthenticated() && (
+        isCompanyAdmin() || resource.data.tenantId == callerTenant()
+      );
+      allow create: if isAuthorizedDevice(request.resource.data.tenantId);
+      allow update: if isAuthorizedDevice(resource.data.tenantId)
+        && request.resource.data.tenantId == resource.data.tenantId;
+      allow delete: if false;
     }
 
-    // 3. Device Sync Telemetry Logs
+    // 3. Device sync telemetry — append-only. Logs are evidence, so nothing may
+    //    rewrite or remove an entry once written.
     match /device_sync_logs/{logId} {
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated() && (
+        isCompanyAdmin() || resource.data.tenantId == callerTenant()
+      );
       allow create: if isAuthorizedDevice(request.resource.data.tenantId);
+      allow update, delete: if false;
     }
   }
 }

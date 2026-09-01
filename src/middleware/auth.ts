@@ -9,6 +9,21 @@ export interface AuthenticatedRequest extends Request {
 }
 
 /**
+ * The `x-simulated-role` headers below grant any caller an arbitrary role with no
+ * credential whatsoever. That is a total authentication bypass, so it is opt-in and
+ * off by default: a deployed environment that never sets ALLOW_SIMULATED_AUTH cannot
+ * be talked into honouring the header, no matter what the caller sends.
+ */
+const SIMULATED_AUTH_ENABLED = process.env.ALLOW_SIMULATED_AUTH === 'true';
+
+if (SIMULATED_AUTH_ENABLED) {
+  console.warn(
+    '[auth] ALLOW_SIMULATED_AUTH=true — x-simulated-role headers are honoured. ' +
+    'This bypasses all authentication and must never be set in production.'
+  );
+}
+
+/**
  * Universal Authentication & Role Discovery Middleware
  * Handles:
  * 1. Device Token (x-device-token or Bearer dev_...)
@@ -67,8 +82,8 @@ export async function authenticate(
       return next();
     }
 
-    // 2. Check Simulated Testing Role Header (For instant UI sandbox & curl testing)
-    if (simulatedRole) {
+    // 2. Check Simulated Testing Role Header (local sandbox only — see SIMULATED_AUTH_ENABLED)
+    if (simulatedRole && SIMULATED_AUTH_ENABLED) {
       if (simulatedRole === 'company_admin') {
         req.auth = {
           role: 'company_admin',
@@ -171,6 +186,38 @@ export async function authenticate(
         const decoded = await adminAuth.verifyIdToken(token);
         const email = decoded.email || '';
         const uid = decoded.uid;
+
+        // A custom claim is signed into the token by Firebase, so it is authoritative
+        // and saves a Firestore read on every request. The collection lookups below
+        // remain as a fallback for accounts provisioned before claims were set.
+        const claimedRole = decoded.role as string | undefined;
+        const claimedTenantId = decoded.tenantId as number | undefined;
+
+        if (claimedRole === 'company_admin') {
+          req.auth = { role: 'company_admin', email, uid };
+          return next();
+        }
+
+        if (claimedRole === 'tenant_admin' && typeof claimedTenantId === 'number') {
+          const tenant = await getDoc<Tenant>(collections.tenants, claimedTenantId);
+
+          if (!tenant || tenant.status === 'suspended') {
+            return res.status(403).json({
+              error: 'Tenant subscription is suspended',
+              code: 'TENANT_SUSPENDED',
+            });
+          }
+
+          req.auth = {
+            role: 'tenant_admin',
+            tenantId: claimedTenantId,
+            tenantName: tenant.companyName,
+            tenantStatus: tenant.status,
+            email,
+            uid,
+          };
+          return next();
+        }
 
         // Check if Company Admin
         const compAdmin = await findOne<CompanyAdmin>(collections.companyAdmins, 'email', email);

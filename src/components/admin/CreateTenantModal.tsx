@@ -1,3 +1,4 @@
+import { api } from '../../lib/api-client.ts';
 import React, { useState } from 'react';
 import { X, Building, Mail, Shield, Check, Copy, Sparkles, AlertCircle, ArrowRight, UserCheck } from 'lucide-react';
 
@@ -44,26 +45,14 @@ export const CreateTenantModal: React.FC<CreateTenantModalProps> = ({
       setLoading(true);
       setError(null);
 
-      const res = await fetch('/api/tenants', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-simulated-role': 'company_admin',
-        },
-        body: JSON.stringify({
-          company_name: companyName.trim(),
-          contact_email: contactEmail.trim(),
-          admin_email: adminEmail.trim() || contactEmail.trim(),
-          plan_tier: planTier,
-          subscriber_limit: subscriberLimit,
-          status: 'active',
-        }),
+      const data = await api.post('/api/tenants', {
+        company_name: companyName.trim(),
+        contact_email: contactEmail.trim(),
+        admin_email: adminEmail.trim() || contactEmail.trim(),
+        plan_tier: planTier,
+        subscriber_limit: subscriberLimit,
+        status: 'active',
       });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to create tenant');
-      }
 
       setCreatedResult(data);
       onTenantCreated(data);

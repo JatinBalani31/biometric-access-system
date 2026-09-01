@@ -42,7 +42,8 @@ registerRouter.post('/', async (req: Request, res: Response) => {
     // Mirror the client-side rules — never trust the browser as the only gate.
     const NAME_PATTERN = /^[A-Za-z][A-Za-z .'-]{1,79}$/;
     const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const PHONE_PATTERN = /^[+]?[\d][\d\s-]{6,17}$/;
+    // Accepts +919876543210 / 919876543210 / 9876543210 and normalises to E.164.
+    const INDIAN_MOBILE_PATTERN = /^[6-9]\d{9}$/;
 
     const trimmedName = String(name).trim();
     if (!NAME_PATTERN.test(trimmedName)) {
@@ -51,11 +52,22 @@ registerRouter.post('/', async (req: Request, res: Response) => {
         code: 'BAD_REQUEST',
       });
     }
-    if (email && !EMAIL_PATTERN.test(String(email).trim())) {
+
+    const trimmedEmail = email ? String(email).trim() : '';
+    if (trimmedEmail && (trimmedEmail.length > 254 || !EMAIL_PATTERN.test(trimmedEmail))) {
       return res.status(400).json({ error: 'Invalid email address.', code: 'BAD_REQUEST' });
     }
-    if (phone && !PHONE_PATTERN.test(String(phone).trim())) {
-      return res.status(400).json({ error: 'Invalid phone number.', code: 'BAD_REQUEST' });
+
+    let normalizedPhone: string | null = null;
+    if (phone) {
+      const digits = String(phone).replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '');
+      if (!INDIAN_MOBILE_PATTERN.test(digits)) {
+        return res.status(400).json({
+          error: 'Enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.',
+          code: 'BAD_REQUEST',
+        });
+      }
+      normalizedPhone = `+91${digits}`;
     }
 
     // The kiosk matches with ${FACE_MODEL_ID}. A vector from any other extractor lives in a
@@ -84,8 +96,9 @@ registerRouter.post('/', async (req: Request, res: Response) => {
     let currentCount = 0;
     let plan: SubscriptionPlan | null = null;
 
+    let existing: Subscriber[] = [];
     if (tenant) {
-      const existing = await listDocs<Subscriber>(collections.subscribers, [['tenantId', '==', tenantId]]);
+      existing = await listDocs<Subscriber>(collections.subscribers, [['tenantId', '==', tenantId]]);
       currentCount = existing.length;
     }
     if (plan_id) {
@@ -100,6 +113,23 @@ registerRouter.post('/', async (req: Request, res: Response) => {
 
     if (tenant.status === 'suspended') {
       return res.status(403).json({ error: 'This organization is currently suspended.', code: 'TENANT_SUSPENDED' });
+    }
+
+    // Without this, one person could self-register unboundedly — inflating the seat
+    // count and leaving several embeddings that all match the same face at the kiosk.
+    const duplicate = existing.find(
+      (s) =>
+        (trimmedEmail && s.email && s.email.toLowerCase() === trimmedEmail.toLowerCase()) ||
+        (normalizedPhone && s.phone === normalizedPhone)
+    );
+    if (duplicate) {
+      return res.status(409).json({
+        error:
+          `A membership already exists at ${tenant.companyName} for this ` +
+          `${trimmedEmail && duplicate.email?.toLowerCase() === trimmedEmail.toLowerCase() ? 'email' : 'mobile number'}. ` +
+          'Please contact the front desk to renew or update it.',
+        code: 'DUPLICATE_SUBSCRIBER',
+      });
     }
 
     const subscriberLimit = tenant.subscriberLimit ?? 100;
@@ -121,8 +151,8 @@ registerRouter.post('/', async (req: Request, res: Response) => {
     const newSubscriber = await createDoc<Subscriber>(collections.subscribers, {
       tenantId,
       name: trimmedName,
-      email: email || null,
-      phone: phone || null,
+      email: trimmedEmail || null,
+      phone: normalizedPhone,
       planId: plan_id ? parseInt(String(plan_id), 10) : null,
       startDate: start.toISOString(),
       endDate: end.toISOString(),
