@@ -1,3 +1,5 @@
+import type { TenantRole } from '../lib/permissions.ts';
+
 export type UserRole = 'company_admin' | 'tenant_admin' | 'device' | 'anonymous';
 
 export interface AuthContext {
@@ -5,6 +7,7 @@ export interface AuthContext {
   email?: string;
   uid?: string;
   tenantId?: number; // Present for tenant_admin and device
+  tenantRole?: TenantRole;
   tenantName?: string | null;
   tenantStatus?: string | null;
   deviceId?: number; // Present for device

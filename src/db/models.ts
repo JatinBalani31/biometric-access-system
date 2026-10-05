@@ -6,6 +6,8 @@
  * against the same JSON shape.
  */
 
+import type { Offering as TenantOffering, TenantLabels, TenantType } from '../lib/tenant-product.ts';
+
 export interface Tenant {
   id: number;
   companyName: string;
@@ -13,6 +15,8 @@ export interface Tenant {
   planTier: string; // 'starter' | 'pro' | 'enterprise'
   subscriberLimit: number;
   status: string; // 'active' | 'suspended' | 'canceled'
+  tenantType?: TenantType;
+  labels?: Partial<TenantLabels>;
   createdAt: string;
 }
 export type NewTenant = Omit<Tenant, 'id'>;
@@ -37,6 +41,9 @@ export interface SubscriptionPlan {
 }
 export type NewSubscriptionPlan = Omit<SubscriptionPlan, 'id'>;
 
+export interface Offering extends TenantOffering {}
+export type NewOffering = Omit<Offering, 'id'>;
+
 export interface Subscriber {
   id: number;
   tenantId: number;
@@ -44,6 +51,8 @@ export interface Subscriber {
   phone: string | null;
   email: string | null;
   planId: number | null;
+  offeringId?: number | null;
+  paymentStatus?: 'pending' | 'paid' | 'not_required';
   startDate: string;
   endDate: string;
   status: string; // 'active' | 'expired' | 'suspended'
@@ -51,18 +60,38 @@ export interface Subscriber {
 }
 export type NewSubscriber = Omit<Subscriber, 'id'>;
 
+export interface CheckInLog {
+  id: number;
+  tenantId: number;
+  subscriberId: number;
+  offeringId: number;
+  deviceId: number | null;
+  slotId: string | null;
+  allowed: boolean;
+  reason: string;
+  checkedInAt: string;
+}
+
 export interface Device {
   id: number;
   tenantId: number;
   deviceName: string;
-  deviceToken: string;
+  deviceToken?: string;
   status: string; // 'active' | 'revoked' | 'maintenance' | 'pending'
   lastSyncedAt: string | null;
   createdAt: string;
-  pairingCode: string | null;
-  pairingCodeExpiresAt: string | null;
+  pairingCode?: string | null;
+  pairingCodeExpiresAt?: string | null;
 }
 export type NewDevice = Omit<Device, 'id'>;
+
+export interface DeviceSecret {
+  id: number;
+  tenantId: number;
+  deviceToken: string;
+  pairingCode?: string | null;
+  pairingCodeExpiresAt?: string | null;
+}
 
 export interface CompanyAdmin {
   id: number;

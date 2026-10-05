@@ -1,9 +1,10 @@
 import { Router, Response } from 'express';
-import { collections, createDoc, getDoc, listDocs } from '../db/firestore.ts';
+import { collections, createDoc, deleteDoc, getDoc, listDocs, updateDoc } from '../db/firestore.ts';
 import { Subscriber, NewSubscriber, SubscriptionPlan, Tenant } from '../db/models.ts';
-import { AuthenticatedRequest, requireTenantAdminOrCompany, resolveTenantId } from '../middleware/auth.ts';
-import { saveFaceEmbedding, getFaceEmbedding } from '../lib/firestore-sync.ts';
+import { AuthenticatedRequest, requireTenantPermission, resolveTenantId } from '../middleware/auth.ts';
+import { saveFaceEmbedding, getFaceEmbedding, revokeFaceEmbedding } from '../lib/firestore-sync.ts';
 import { ErrorResponse, FaceEmbeddingRecord, CreateSubscriberRequest } from '../types/api.ts';
+import { logAuditAction } from '../lib/audit-logger.ts';
 
 export const subscribersRouter = Router();
 
@@ -26,7 +27,7 @@ function computeSubscriberDaysLeft(endDate: Date | string) {
 }
 
 // GET /api/subscribers - List subscribers for tenant
-subscribersRouter.get('/', requireTenantAdminOrCompany, async (req: AuthenticatedRequest, res: Response) => {
+subscribersRouter.get('/', requireTenantPermission('subscribers', 'read'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const tenantId = resolveTenantId(req);
     if (!tenantId && req.auth?.role !== 'company_admin') {
@@ -77,21 +78,16 @@ subscribersRouter.get('/', requireTenantAdminOrCompany, async (req: Authenticate
 });
 
 // GET /api/subscribers/:id/days-left - Compute and return days_left based on end_date
-subscribersRouter.get('/:id/days-left', requireTenantAdminOrCompany, async (req: AuthenticatedRequest, res: Response) => {
+subscribersRouter.get('/:id/days-left', requireTenantPermission('subscribers', 'read'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const subscriberId = parseInt(req.params.id, 10);
     const tenantId = resolveTenantId(req);
 
     const sub = await getDoc<Subscriber>(collections.subscribers, subscriberId);
-    const plan = sub && sub.planId != null ? await getDoc<SubscriptionPlan>(collections.subscriptionPlans, sub.planId) : null;
-
-    if (!sub) {
+    if (!sub || (tenantId !== null && sub.tenantId !== tenantId)) {
       return res.status(404).json({ error: 'Subscriber not found', code: 'NOT_FOUND' });
     }
-
-    if (tenantId && sub.tenantId !== tenantId && req.auth?.role !== 'company_admin') {
-      return res.status(403).json({ error: 'Access denied to this subscriber', code: 'FORBIDDEN' });
-    }
+    const plan = sub && sub.planId != null ? await getDoc<SubscriptionPlan>(collections.subscriptionPlans, sub.planId) : null;
 
     const { daysLeft, isExpired, formattedEndDate } = computeSubscriberDaysLeft(sub.endDate);
     const now = new Date();
@@ -122,7 +118,7 @@ subscribersRouter.get('/:id/days-left', requireTenantAdminOrCompany, async (req:
 });
 
 // POST /api/subscribers - Create Subscriber (ENFORCES SUBSCRIBER LIMIT)
-subscribersRouter.post('/', requireTenantAdminOrCompany, async (req: AuthenticatedRequest, res: Response) => {
+subscribersRouter.post('/', requireTenantPermission('subscribers', 'create'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const tenantId = resolveTenantId(req);
     if (!tenantId) {
@@ -160,6 +156,13 @@ subscribersRouter.post('/', requireTenantAdminOrCompany, async (req: Authenticat
       return res.status(400).json({ error: 'Subscriber name is required', code: 'BAD_REQUEST' });
     }
 
+    if (plan_id) {
+      const selectedPlan = await getDoc<SubscriptionPlan>(collections.subscriptionPlans, plan_id);
+      if (!selectedPlan || selectedPlan.tenantId !== tenantId) {
+        return res.status(400).json({ error: 'Plan does not belong to this tenant', code: 'BAD_REQUEST' });
+      }
+    }
+
     const start = start_date ? new Date(start_date) : new Date();
     const end = end_date ? new Date(end_date) : new Date(start.getTime() + (duration_days || 30) * 24 * 60 * 60 * 1000);
 
@@ -187,6 +190,17 @@ subscribersRouter.post('/', requireTenantAdminOrCompany, async (req: Authenticat
       });
     }
 
+    await logAuditAction({
+      actorEmail: req.auth?.email ?? 'unknown',
+      actorRole: req.auth?.tenantRole ?? req.auth?.role,
+      action: 'SUBSCRIBER_REGISTERED',
+      tenantId,
+      targetType: 'subscriber',
+      targetId: String(newSubscriber.id),
+      newState: { name: newSubscriber.name, status: newSubscriber.status },
+      ipAddress: req.ip,
+    });
+
     const { daysLeft, isExpired } = computeSubscriberDaysLeft(newSubscriber.endDate);
 
     res.status(201).json({
@@ -206,15 +220,109 @@ subscribersRouter.post('/', requireTenantAdminOrCompany, async (req: Authenticat
 });
 
 // GET /api/subscribers/:id - Get single subscriber
-subscribersRouter.get('/:id', requireTenantAdminOrCompany, async (req: AuthenticatedRequest, res: Response) => {
+subscribersRouter.get('/:id', requireTenantPermission('subscribers', 'read'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const subscriberId = parseInt(req.params.id, 10);
     const sub = await getDoc<Subscriber>(collections.subscribers, subscriberId);
-    if (!sub) return res.status(404).json({ error: 'Subscriber not found', code: 'NOT_FOUND' });
+    const tenantId = resolveTenantId(req);
+    if (!sub || (tenantId !== null && sub.tenantId !== tenantId)) {
+      return res.status(404).json({ error: 'Subscriber not found', code: 'NOT_FOUND' });
+    }
     const { daysLeft, isExpired } = computeSubscriberDaysLeft(sub.endDate);
     const embedding = await getFaceEmbedding(sub.tenantId, sub.id);
     return res.json({ ...sub, daysLeft, isExpired, faceEmbedding: embedding });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to fetch subscriber', code: 'INTERNAL_ERROR' });
+  }
+});
+
+subscribersRouter.patch('/:id', requireTenantPermission('subscribers', 'update'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const subscriberId = parseInt(req.params.id, 10);
+    const tenantId = resolveTenantId(req);
+    const current = await getDoc<Subscriber>(collections.subscribers, subscriberId);
+    if (!current || (tenantId !== null && current.tenantId !== tenantId)) {
+      return res.status(404).json({ error: 'Subscriber not found', code: 'NOT_FOUND' });
+    }
+
+    const updates: Record<string, unknown> = {};
+    const { name, email, phone, plan_id, start_date, end_date, status } = req.body;
+    if (name !== undefined) {
+      if (typeof name !== 'string' || !name.trim() || name.trim().length > 120) {
+        return res.status(400).json({ error: 'name must be 1-120 characters', code: 'BAD_REQUEST' });
+      }
+      updates.name = name.trim();
+    }
+    if (email !== undefined) updates.email = email ? String(email).trim() : null;
+    if (phone !== undefined) updates.phone = phone ? String(phone).trim() : null;
+    if (plan_id !== undefined) {
+      const plan = plan_id ? await getDoc<SubscriptionPlan>(collections.subscriptionPlans, plan_id) : null;
+      if (plan_id && (!plan || plan.tenantId !== current.tenantId)) {
+        return res.status(400).json({ error: 'Plan does not belong to this tenant', code: 'BAD_REQUEST' });
+      }
+      updates.planId = plan?.id ?? null;
+    }
+    if (start_date !== undefined) {
+      const start = new Date(start_date);
+      if (Number.isNaN(start.getTime())) return res.status(400).json({ error: 'Invalid start_date', code: 'BAD_REQUEST' });
+      updates.startDate = start.toISOString();
+    }
+    if (end_date !== undefined) {
+      const end = new Date(end_date);
+      if (Number.isNaN(end.getTime())) return res.status(400).json({ error: 'Invalid end_date', code: 'BAD_REQUEST' });
+      updates.endDate = end.toISOString();
+    }
+    if (status !== undefined) {
+      if (!['active', 'expired', 'suspended'].includes(status)) {
+        return res.status(400).json({ error: 'Invalid subscriber status', code: 'BAD_REQUEST' });
+      }
+      updates.status = status;
+    }
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'No supported fields to update', code: 'BAD_REQUEST' });
+    }
+
+    await updateDoc(collections.subscribers, subscriberId, updates);
+    await logAuditAction({
+      actorEmail: req.auth?.email ?? 'unknown',
+      actorRole: req.auth?.tenantRole ?? req.auth?.role,
+      action: 'SUBSCRIBER_UPDATED',
+      tenantId: current.tenantId,
+      targetType: 'subscriber',
+      targetId: String(subscriberId),
+      previousState: current,
+      newState: updates,
+      ipAddress: req.ip,
+    });
+    return res.json({ ...current, ...updates });
+  } catch (error: any) {
+    return res.status(500).json({ error: 'Failed to update subscriber', code: 'INTERNAL_ERROR', details: error.message });
+  }
+});
+
+subscribersRouter.delete('/:id', requireTenantPermission('subscribers', 'delete'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const subscriberId = parseInt(req.params.id, 10);
+    const tenantId = resolveTenantId(req);
+    const current = await getDoc<Subscriber>(collections.subscribers, subscriberId);
+    if (!current || (tenantId !== null && current.tenantId !== tenantId)) {
+      return res.status(404).json({ error: 'Subscriber not found', code: 'NOT_FOUND' });
+    }
+
+    await deleteDoc(collections.subscribers, subscriberId);
+    await revokeFaceEmbedding(current.tenantId, subscriberId);
+    await logAuditAction({
+      actorEmail: req.auth?.email ?? 'unknown',
+      actorRole: req.auth?.tenantRole ?? req.auth?.role,
+      action: 'SUBSCRIBER_DELETED',
+      tenantId: current.tenantId,
+      targetType: 'subscriber',
+      targetId: String(subscriberId),
+      previousState: current,
+      ipAddress: req.ip,
+    });
+    return res.status(204).send();
+  } catch (error: any) {
+    return res.status(500).json({ error: 'Failed to delete subscriber', code: 'INTERNAL_ERROR', details: error.message });
   }
 });

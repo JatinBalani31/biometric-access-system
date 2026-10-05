@@ -28,6 +28,8 @@ import {
 
 import { CompanyControlPanel } from './components/admin/CompanyControlPanel.tsx';
 import { RegistrationPortal } from './components/RegistrationPortal.tsx';
+import { TenantWorkspace } from './components/tenant/TenantWorkspace.tsx';
+import { api } from './lib/api-client.ts';
 
 interface SystemSummary {
   status: string;
@@ -46,6 +48,9 @@ export default function App() {
   // Route: /register → show public self-registration portal
   if (window.location.pathname === '/register') {
     return <RegistrationPortal />;
+  }
+  if (window.location.pathname === '/workspace') {
+    return <TenantWorkspace />;
   }
 
   const [viewMode, setViewMode] = useState<'control_panel' | 'dev_portal'>('control_panel');
@@ -88,15 +93,12 @@ export default function App() {
   const fetchSystemData = async () => {
     try {
       setLoading(true);
-      const res = await fetch('/api/system/summary');
-      if (res.ok) {
-        const data = await res.json();
-        setSystemSummary(data);
-        if (data.tenants && data.tenants.length > 0) {
-          setTenantsList(data.tenants);
-          if (!selectedTenantId && data.tenants[0]?.id) {
-            setSelectedTenantId(data.tenants[0].id);
-          }
+      const data = await api.get<SystemSummary>('/api/system/summary');
+      setSystemSummary(data);
+      if (data.tenants && data.tenants.length > 0) {
+        setTenantsList(data.tenants);
+        if (!selectedTenantId && data.tenants[0]?.id) {
+          setSelectedTenantId(data.tenants[0].id);
         }
       }
     } catch (err: any) {

@@ -9,11 +9,21 @@ export interface AuditLogPayload {
     | 'TENANT_LIMIT_UPDATED'
     | 'TENANT_PLAN_UPDATED'
     | 'TENANT_STATUS_UPDATED'
+    | 'TENANT_CONFIGURATION_UPDATED'
     | 'ADMIN_INVITED'
     | 'DEVICE_REGISTERED'
     | 'DEVICE_REVOKED'
     | 'DEVICE_PAIRED'
     | 'SUBSCRIBER_REGISTERED'
+    | 'SUBSCRIBER_UPDATED'
+    | 'SUBSCRIBER_DELETED'
+    | 'PLAN_CREATED'
+    | 'PLAN_UPDATED'
+    | 'PLAN_DELETED'
+    | 'OFFERING_CREATED'
+    | 'OFFERING_UPDATED'
+    | 'OFFERING_DELETED'
+    | 'DEVICE_UPDATED'
     | 'PURGE_ALL_BIOMETRIC_DATA';
   tenantId?: number | null;
   tenantName?: string | null;

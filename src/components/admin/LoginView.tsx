@@ -1,36 +1,58 @@
 import React, { useState } from 'react';
 import { Shield, Lock, Mail, Key, Sparkles, CheckCircle2, AlertTriangle, ArrowRight } from 'lucide-react';
-import { auth, googleAuthProvider } from '../../lib/firebase.ts';
-import { api } from '../../lib/api-client.ts';
-import { signInWithEmailAndPassword, signInWithPopup } from 'firebase/auth';
+import { auth } from '../../lib/firebase.ts';
+import { sendPasswordResetEmail, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { tenantRoles, TenantRole } from '../../lib/permissions.ts';
 
 interface LoginViewProps {
-  onLoginSuccess: (user: { email: string; role: string; token?: string }) => void;
+  audience?: 'company' | 'tenant';
+  onLoginSuccess: (user: {
+    email: string;
+    role: string;
+    token?: string;
+    tenantId?: number;
+    tenantRole?: TenantRole;
+  }) => void;
 }
 
-/**
- * Reads the role from the token's custom claims, falling back to asking the API
- * who it thinks we are. The server is the authority either way — this only picks
- * the screen to render, and a wrong answer here cannot unlock any data.
- */
-async function resolveRole(claims: Record<string, any>): Promise<string | null> {
-  const claimed = claims.role ?? (claims.company_admin === true ? 'company_admin' : null);
-  if (claimed === 'company_admin' || claimed === 'tenant_admin') return claimed;
-
-  try {
-    const health = await api.get('/api/health');
-    const role = health?.caller?.role;
-    return role === 'company_admin' || role === 'tenant_admin' ? role : null;
-  } catch {
-    return null;
+function resolveClaims(claims: Record<string, any>) {
+  if (claims.role === 'company_admin') return { role: 'company_admin' as const };
+  if (
+    claims.role === 'tenant_admin' &&
+    Number.isInteger(claims.tenantId) &&
+    tenantRoles.includes(claims.tenantRole as TenantRole)
+  ) {
+    return {
+      role: 'tenant_admin' as const,
+      tenantId: claims.tenantId as number,
+      tenantRole: claims.tenantRole as TenantRole,
+    };
   }
+  return null;
 }
 
-export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
+export const LoginView: React.FC<LoginViewProps> = ({ audience = 'company', onLoginSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handlePasswordReset = async () => {
+    if (!email.trim()) {
+      setError('Enter your email address first, then choose password reset.');
+      return;
+    }
+    try {
+      setLoading(true);
+      setError(null);
+      await sendPasswordResetEmail(auth, email.trim());
+      setError('If a Firebase account exists for that address, a password reset email has been sent.');
+    } catch {
+      setError('Password reset is unavailable. Verify the email provider and authorized domain in Firebase.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Firebase Email/Password Sign In
   const handleEmailLogin = async (e: React.FormEvent) => {
@@ -50,17 +72,22 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       // ("superadmin", "@platform.io") let anyone who could register such an address
       // walk into the panel. The server verifies the same claim independently, so this
       // check only decides which screen to show.
-      const role = await resolveRole(idTokenResult.claims);
+      const principal = resolveClaims(idTokenResult.claims);
+      const allowed = audience === 'tenant'
+        ? principal?.role === 'tenant_admin'
+        : principal?.role === 'company_admin';
 
-      if (!role) {
-        setError('Access denied: this account has no admin role assigned.');
-        setLoading(false);
+      if (!principal || !allowed) {
+        await signOut(auth);
+        setError(audience === 'tenant'
+          ? 'Access denied: valid tenant role and tenant ID claims are required.'
+          : 'Access denied: this account has no company admin role assigned.');
         return;
       }
 
       onLoginSuccess({
         email: userCred.user.email || email,
-        role,
+        ...principal,
         token: idTokenResult.token,
       });
     } catch (err: any) {
@@ -71,42 +98,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     }
   };
 
-  // Firebase Google Sign-In
-  const handleGoogleLogin = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const userCred = await signInWithPopup(auth, googleAuthProvider);
-      const idTokenResult = await userCred.user.getIdTokenResult(true);
-
-      const role = await resolveRole(idTokenResult.claims);
-
-      if (!role) {
-        setError('Access denied: this Google account has no admin role assigned.');
-        setLoading(false);
-        return;
-      }
-
-      onLoginSuccess({
-        email: userCred.user.email || '',
-        role,
-        token: idTokenResult.token,
-      });
-    } catch (err: any) {
-      setError(err.message || 'Google sign-in was cancelled or failed.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Instant Dev Sandbox Bypass Login (for frictionless testing)
   const handleDevSandboxLogin = () => {
     setLoading(true);
     setTimeout(() => {
-      onLoginSuccess({
-        email: 'superadmin@platform.io',
-        role: 'company_admin',
-      });
+      if (audience === 'company') onLoginSuccess({ email: 'superadmin@platform.io', role: 'company_admin' });
       setLoading(false);
     }, 400);
   };
@@ -123,13 +119,15 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-indigo-600 to-blue-500 shadow-xl shadow-indigo-500/25 border border-indigo-400/30 mb-4">
             <Shield className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">Company Control Panel</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
+            {audience === 'tenant' ? 'Organization Workspace' : 'Company Control Panel'}
+          </h1>
           <p className="text-sm text-slate-400 mt-2">
-            Internal administrative gateway for multi-tenant B2B platform operations
+            {audience === 'tenant' ? 'Sign in to manage your organization.' : 'Internal administrative gateway for multi-tenant B2B platform operations'}
           </p>
           <div className="inline-flex items-center gap-1.5 px-3 py-1 mt-3 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-xs font-semibold">
             <Lock className="w-3 h-3" />
-            Restricted: company_admin role only
+            {audience === 'tenant' ? 'Tenant role and tenant ID claims required' : 'Restricted: company_admin role only'}
           </div>
         </div>
 
@@ -145,7 +143,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
           <form onSubmit={handleEmailLogin} className="space-y-4">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                Admin Email Address
+                {audience === 'tenant' ? 'Work Email Address' : 'Admin Email Address'}
               </label>
               <div className="relative">
                 <Mail className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -153,16 +151,19 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="admin@platform.io"
+                  placeholder={audience === 'tenant' ? 'you@organization.com' : 'admin@platform.io'}
                   className="w-full bg-slate-950/70 border border-slate-700/80 rounded-xl pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                Password
-              </label>
+              <div className="mb-1.5 flex items-center justify-between">
+                <label className="block text-xs font-medium text-slate-300">Password</label>
+                <button type="button" onClick={handlePasswordReset} disabled={loading} className="text-xs text-indigo-300 hover:text-indigo-200 disabled:opacity-50">
+                  Forgot password?
+                </button>
+              </div>
               <div className="relative">
                 <Key className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
                 <input
@@ -184,7 +185,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : (
                 <>
-                  <span>Sign In as Company Admin</span>
+                  <span>{audience === 'tenant' ? 'Sign In to Organization' : 'Sign In as Company Admin'}</span>
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
@@ -194,7 +195,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
           {/* The unauthenticated one-click superadmin sign-in that used to sit here
               handed full platform access to anyone who loaded this page. It is now
               available only when the local sandbox flag is on. */}
-          {import.meta.env.DEV && (
+          {audience === 'company' && import.meta.env.DEV && (
             <>
               <div className="relative my-6 text-center">
                 <div className="absolute inset-0 flex items-center">

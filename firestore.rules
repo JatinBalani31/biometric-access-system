@@ -1,66 +1,305 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // The API reaches Firestore through the Admin SDK, which bypasses these rules
-    // entirely — every rule below governs direct client-SDK access from a browser
-    // or the kiosk app. Default deny: any collection without an explicit match
-    // (subscribers, tenants, devices, audit_logs, _counters) is unreachable from a
-    // client and can only be touched by the authenticated API.
-
-    function isAuthenticated() {
+    // Assumed data model (Admin SDK/API writes use the same document shapes):
+    // tenants/{id}: numeric id, companyName/contactEmail strings, planTier string,
+    //   subscriberLimit int, status string, createdAt ISO string.
+    // subscribers/{id}: numeric id/tenantId, name string, email/phone nullable
+    //   strings, planId nullable int, startDate/endDate/createdAt ISO strings,
+    //   status string.
+    // subscription_plans/{id}: numeric id/tenantId, name string, durationDays int,
+    //   price string, createdAt ISO string.
+    // offerings/{id}: numeric id/tenantId, kind/labels/currency strings, priceMinor
+    //   int, period/config maps, slots list, capacity and check-in limits.
+    // devices/{id}: numeric id/tenantId, deviceName/status strings,
+    //   nullable lastSyncedAt, createdAt ISO string. Credentials live separately.
+    // device_secrets/{id}: server-only deviceToken and nullable pairing fields.
+    // tenant_admins/{id}: numeric id/tenantId, email/role strings, nullable uid,
+    //   createdAt ISO string; membership writes are Admin-SDK-only.
+    // audit_logs/{id}: tenantId nullable int, actor/action/target/state strings,
+    //   ipAddress/createdAt strings; writes are Admin-SDK-only.
+    // face_embeddings/{key}: string id, numeric tenantId/subscriberId, 192-float
+    //   vector, model/status strings, timestamps as ISO strings.
+    // sync_status/{key}: tenantId int plus device sync state; device_sync_logs/{id}:
+    //   tenantId/deviceId ints and append-only sync event metadata.
+    // All other collections (including _counters) default to deny.
+    // Tenant authority is derived only from signed claims. Keep this mirror aligned
+    // with src/lib/permissions.ts; emulator tests exercise every matrix cell.
+    function signedIn() {
       return request.auth != null;
     }
 
-    function callerTenant() {
-      return request.auth.token.tenantId;
+    function companyAdmin() {
+      return signedIn() && request.auth.token.role == 'company_admin';
     }
 
-    function isCompanyAdmin() {
-      return isAuthenticated() && request.auth.token.role == 'company_admin';
+    function tenantMember(tenantId) {
+      return signedIn()
+        && request.auth.token.role == 'tenant_admin'
+        && request.auth.token.tenantId is int
+        && request.auth.token.tenantId == tenantId;
     }
 
-    function isTenantAdmin(tenantId) {
-      return isCompanyAdmin() ||
-        (isAuthenticated() && request.auth.token.role == 'tenant_admin' && callerTenant() == tenantId);
+    function owner() {
+      return signedIn() && request.auth.token.role == 'tenant_admin'
+        && request.auth.token.tenantRole == 'owner';
     }
 
-    function isAuthorizedDevice(tenantId) {
-      return isCompanyAdmin() ||
-        (isAuthenticated() && request.auth.token.role == 'device' && callerTenant() == tenantId);
+    function manager() {
+      return signedIn() && request.auth.token.role == 'tenant_admin'
+        && request.auth.token.tenantRole == 'manager';
     }
 
-    // 1. Face embeddings — biometric data. Readable only within the owning tenant,
-    //    writable only by that tenant's admins.
-    match /face_embeddings/{docId} {
-      allow read: if isAuthenticated() && (
-        isCompanyAdmin() || resource.data.tenantId == callerTenant()
-      );
-      allow create, update: if isTenantAdmin(request.resource.data.tenantId);
-      // Deleting an enrolment is an audited server-side action, never a client one.
+    function frontDesk() {
+      return signedIn() && request.auth.token.role == 'tenant_admin'
+        && request.auth.token.tenantRole == 'front-desk';
+    }
+
+    function auditor() {
+      return signedIn() && request.auth.token.role == 'tenant_admin'
+        && request.auth.token.tenantRole == 'read-only-auditor';
+    }
+
+    function deviceForTenant(tenantId) {
+      return signedIn() && request.auth.token.role == 'device'
+        && request.auth.token.tenantId is int
+        && request.auth.token.tenantId == tenantId;
+    }
+
+    // This is the Firestore Rules mirror of the app/backend matrix. Emulator tests
+    // check every role/resource/action combination so drift is caught.
+    function canRead(resourceName) {
+      return companyAdmin() || owner() || manager()
+        || (frontDesk() && resourceName in ['profile', 'subscribers', 'plans', 'offerings', 'devices'])
+        || (auditor() && resourceName in ['profile', 'subscribers', 'plans', 'offerings', 'devices', 'activity']);
+    }
+
+    function canCreate(resourceName) {
+      return companyAdmin() || owner()
+        || (manager() && resourceName in ['subscribers', 'plans', 'offerings', 'devices', 'biometrics'])
+        || (frontDesk() && resourceName == 'subscribers');
+    }
+
+    function canUpdate(resourceName) {
+      return companyAdmin() || owner()
+        || (manager() && resourceName in ['subscribers', 'plans', 'offerings', 'devices', 'biometrics'])
+        || (frontDesk() && resourceName == 'subscribers');
+    }
+
+    function canDelete(resourceName) {
+      return companyAdmin() || (owner() && resourceName in ['subscribers', 'plans', 'offerings', 'devices', 'biometrics']);
+    }
+
+    function tenantRead(tenantId, resourceName) {
+      return companyAdmin() || (tenantMember(tenantId) && canRead(resourceName));
+    }
+
+    function tenantCreate(tenantId, resourceName) {
+      return companyAdmin() || (tenantMember(tenantId) && canCreate(resourceName));
+    }
+
+    function tenantUpdate(tenantId, resourceName) {
+      return companyAdmin() || (tenantMember(tenantId) && canUpdate(resourceName));
+    }
+
+    function tenantDelete(tenantId, resourceName) {
+      return companyAdmin() || (tenantMember(tenantId) && canDelete(resourceName));
+    }
+
+    function validTenant(data) {
+      return data.keys().hasOnly(['id', 'companyName', 'contactEmail', 'planTier', 'subscriberLimit', 'status', 'tenantType', 'labels', 'createdAt'])
+        && data.keys().hasAll(['id', 'companyName', 'contactEmail', 'planTier', 'subscriberLimit', 'status', 'createdAt'])
+        && data.id is int
+        && data.companyName is string && data.companyName.size() > 0 && data.companyName.size() <= 120
+        && data.contactEmail is string && data.contactEmail.size() <= 254
+        && data.planTier in ['starter', 'pro', 'enterprise']
+        && data.subscriberLimit is int && data.subscriberLimit > 0
+        && data.status in ['active', 'suspended', 'canceled']
+        && (!('tenantType' in data) || data.tenantType in ['gym', 'mess', 'class'])
+        && (!('labels' in data) || (data.labels is map
+          && data.labels.keys().hasOnly(['customerSingular', 'customerPlural', 'offeringSingular', 'offeringPlural'])
+          && (!('customerSingular' in data.labels) || (data.labels.customerSingular is string && data.labels.customerSingular.size() > 0 && data.labels.customerSingular.size() <= 32))
+          && (!('customerPlural' in data.labels) || (data.labels.customerPlural is string && data.labels.customerPlural.size() > 0 && data.labels.customerPlural.size() <= 32))
+          && (!('offeringSingular' in data.labels) || (data.labels.offeringSingular is string && data.labels.offeringSingular.size() > 0 && data.labels.offeringSingular.size() <= 32))
+          && (!('offeringPlural' in data.labels) || (data.labels.offeringPlural is string && data.labels.offeringPlural.size() > 0 && data.labels.offeringPlural.size() <= 32))))
+        && data.createdAt is string;
+    }
+
+    function validSubscriber(data) {
+      return data.keys().hasOnly(['id', 'tenantId', 'name', 'email', 'phone', 'planId', 'startDate', 'endDate', 'status', 'createdAt'])
+        && data.keys().hasAll(['id', 'tenantId', 'name', 'email', 'phone', 'planId', 'startDate', 'endDate', 'status', 'createdAt'])
+        && data.id is int && data.tenantId is int
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 120
+        && (data.email == null || (data.email is string && data.email.size() <= 254))
+        && (data.phone == null || (data.phone is string && data.phone.size() <= 32))
+        && (data.planId == null || data.planId is int)
+        && data.startDate is string && data.endDate is string
+        && data.status in ['active', 'expired', 'suspended']
+        && data.createdAt is string;
+    }
+
+    function validPlan(data) {
+      return data.keys().hasOnly(['id', 'tenantId', 'name', 'durationDays', 'price', 'createdAt'])
+        && data.keys().hasAll(['id', 'tenantId', 'name', 'durationDays', 'price', 'createdAt'])
+        && data.id is int && data.tenantId is int
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.durationDays is int && data.durationDays > 0 && data.durationDays <= 3650
+        && data.price is string && data.price.size() <= 20
+        && data.createdAt is string;
+    }
+
+    function validOffering(data) {
+      return data.keys().hasOnly([
+          'id', 'tenantId', 'name', 'description', 'kind', 'priceMinor', 'currency', 'active',
+          'period', 'capacityLimit', 'timezone', 'maxEntriesPerDay', 'duplicateWindowMinutes',
+          'slots', 'mealsPerDay', 'mealSlotIds', 'skipRules', 'enrollmentLimit', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasAll([
+          'id', 'tenantId', 'name', 'description', 'kind', 'priceMinor', 'currency', 'active',
+          'period', 'capacityLimit', 'timezone', 'maxEntriesPerDay', 'duplicateWindowMinutes',
+          'slots', 'createdAt', 'updatedAt'
+        ])
+        && data.id is int && data.tenantId is int
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.description is string && data.description.size() <= 1000
+        && data.kind in ['membership', 'meal-plan', 'class-course']
+        && data.priceMinor is int && data.priceMinor >= 0
+        && data.currency is string && data.currency.matches('^[A-Z]{3}$')
+        && data.active is bool
+        && data.period is map && data.period.keys().hasOnly(['kind', 'customDays'])
+        && data.period.kind in ['monthly', 'quarterly', 'custom']
+        && (data.period.kind != 'custom' || (data.period.customDays is int && data.period.customDays > 0 && data.period.customDays <= 3650))
+        && (data.capacityLimit == null || (data.capacityLimit is int && data.capacityLimit > 0))
+        && data.timezone is string && data.timezone.size() > 0 && data.timezone.size() <= 64
+        && (data.maxEntriesPerDay == null || (data.maxEntriesPerDay is int && data.maxEntriesPerDay > 0))
+        && data.duplicateWindowMinutes is int && data.duplicateWindowMinutes >= 0 && data.duplicateWindowMinutes <= 1440
+        && data.slots is list && data.slots.size() <= 50
+        && (!('mealsPerDay' in data) || (data.mealsPerDay is int && data.mealsPerDay > 0 && data.mealsPerDay <= 20))
+        && (!('mealSlotIds' in data) || (data.mealSlotIds is list && data.mealSlotIds.size() <= 50))
+        && (!('skipRules' in data) || (data.skipRules is map
+          && data.skipRules.keys().hasOnly(['cutoffMinutes', 'maxSkipsPerPeriod'])
+          && data.skipRules.cutoffMinutes is int && data.skipRules.cutoffMinutes >= 0
+          && data.skipRules.maxSkipsPerPeriod is int && data.skipRules.maxSkipsPerPeriod >= 0))
+        && (!('enrollmentLimit' in data) || data.enrollmentLimit == null || (data.enrollmentLimit is int && data.enrollmentLimit > 0))
+        && data.createdAt is string && data.updatedAt is string;
+    }
+
+    function validDevice(data) {
+      return data.keys().hasOnly(['id', 'tenantId', 'deviceName', 'status', 'lastSyncedAt', 'createdAt'])
+        && data.keys().hasAll(['id', 'tenantId', 'deviceName', 'status', 'lastSyncedAt', 'createdAt'])
+        && data.id is int && data.tenantId is int
+        && data.deviceName is string && data.deviceName.size() > 0 && data.deviceName.size() <= 100
+        && data.status in ['active', 'revoked', 'maintenance', 'pending']
+        && (data.lastSyncedAt == null || data.lastSyncedAt is string)
+        && data.createdAt is string;
+    }
+
+    function validEmbedding(data) {
+      return data.keys().hasOnly(['id', 'tenantId', 'subscriberId', 'subscriberName', 'email', 'vector', 'vectorDimension', 'modelId', 'status', 'updatedAt', 'createdAt'])
+        && data.keys().hasAll(['id', 'tenantId', 'subscriberId', 'subscriberName', 'vector', 'vectorDimension', 'modelId', 'status', 'updatedAt', 'createdAt'])
+        && data.id is string && data.tenantId is int && data.subscriberId is int
+        && data.subscriberName is string && data.subscriberName.size() <= 120
+        && (!('email' in data) || (data.email is string && data.email.size() <= 254))
+        && data.vector is list && data.vector.size() == 192
+        && data.vectorDimension == 192 && data.modelId is string
+        && data.status in ['active', 'revoked', 'pending']
+        && data.updatedAt is string && data.createdAt is string;
+    }
+
+    match /tenants/{tenantDocId} {
+      allow get, list: if tenantRead(resource.data.id, 'profile');
+      allow create, delete: if false;
+      allow update: if tenantUpdate(resource.data.id, 'profile') && owner()
+        && validTenant(request.resource.data)
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAt == resource.data.createdAt;
+    }
+
+    match /tenant_admins/{adminDocId} {
+      allow get, list: if companyAdmin() || (tenantMember(resource.data.tenantId) && owner());
+      allow create, update, delete: if false;
+    }
+
+    match /subscribers/{subscriberDocId} {
+      allow get, list: if tenantRead(resource.data.tenantId, 'subscribers');
+      allow create: if tenantCreate(request.resource.data.tenantId, 'subscribers') && validSubscriber(request.resource.data);
+      allow update: if tenantUpdate(resource.data.tenantId, 'subscribers')
+        && request.resource.data.tenantId == resource.data.tenantId
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAt == resource.data.createdAt
+        && validSubscriber(request.resource.data);
+      allow delete: if tenantDelete(resource.data.tenantId, 'subscribers');
+    }
+
+    match /subscription_plans/{planDocId} {
+      allow get, list: if tenantRead(resource.data.tenantId, 'plans');
+      allow create: if tenantCreate(request.resource.data.tenantId, 'plans') && validPlan(request.resource.data);
+      allow update: if tenantUpdate(resource.data.tenantId, 'plans')
+        && request.resource.data.tenantId == resource.data.tenantId
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAt == resource.data.createdAt
+        && validPlan(request.resource.data);
+      allow delete: if tenantDelete(resource.data.tenantId, 'plans');
+    }
+
+    match /offerings/{offeringDocId} {
+      allow get, list: if tenantRead(resource.data.tenantId, 'offerings');
+      allow create: if tenantCreate(request.resource.data.tenantId, 'offerings') && validOffering(request.resource.data);
+      allow update: if tenantUpdate(resource.data.tenantId, 'offerings')
+        && request.resource.data.tenantId == resource.data.tenantId
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAt == resource.data.createdAt
+        && validOffering(request.resource.data);
+      allow delete: if tenantDelete(resource.data.tenantId, 'offerings');
+    }
+
+    match /devices/{deviceDocId} {
+      allow get, list: if tenantRead(resource.data.tenantId, 'devices');
+      allow create: if tenantCreate(request.resource.data.tenantId, 'devices') && validDevice(request.resource.data);
+      allow update: if tenantUpdate(resource.data.tenantId, 'devices')
+        && request.resource.data.tenantId == resource.data.tenantId
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAt == resource.data.createdAt
+        && validDevice(request.resource.data);
+      allow delete: if tenantDelete(resource.data.tenantId, 'devices');
+    }
+
+    match /audit_logs/{auditDocId} {
+      allow get, list: if tenantRead(resource.data.tenantId, 'activity');
+      allow create, update, delete: if false;
+    }
+
+    match /face_embeddings/{embeddingDocId} {
+      allow get, list: if tenantRead(resource.data.tenantId, 'biometrics');
+      allow create: if tenantCreate(request.resource.data.tenantId, 'biometrics') && validEmbedding(request.resource.data);
+      allow update: if tenantUpdate(resource.data.tenantId, 'biometrics')
+        && request.resource.data.tenantId == resource.data.tenantId
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAt == resource.data.createdAt
+        && validEmbedding(request.resource.data);
+      allow delete: if tenantDelete(resource.data.tenantId, 'biometrics');
+    }
+
+    match /sync_status/{statusDocId} {
+      allow get, list: if companyAdmin() || (tenantMember(resource.data.tenantId) && canRead('activity'));
+      allow create: if companyAdmin() || (deviceForTenant(request.resource.data.tenantId) && request.resource.data.tenantId is int);
+      allow update: if companyAdmin() || (deviceForTenant(resource.data.tenantId)
+        && request.resource.data.tenantId == resource.data.tenantId);
       allow delete: if false;
     }
 
-    // 2. Sync status — a device may only write its own tenant's row, and the
-    //    tenantId must not change on update.
-    match /sync_status/{docId} {
-      allow read: if isAuthenticated() && (
-        isCompanyAdmin() || resource.data.tenantId == callerTenant()
-      );
-      allow create: if isAuthorizedDevice(request.resource.data.tenantId);
-      allow update: if isAuthorizedDevice(resource.data.tenantId)
-        && request.resource.data.tenantId == resource.data.tenantId;
-      allow delete: if false;
-    }
-
-    // 3. Device sync telemetry — append-only. Logs are evidence, so nothing may
-    //    rewrite or remove an entry once written.
-    match /device_sync_logs/{logId} {
-      allow read: if isAuthenticated() && (
-        isCompanyAdmin() || resource.data.tenantId == callerTenant()
-      );
-      allow create: if isAuthorizedDevice(request.resource.data.tenantId);
+    match /device_sync_logs/{logDocId} {
+      allow get, list: if tenantRead(resource.data.tenantId, 'activity');
+      allow create: if companyAdmin() || (deviceForTenant(request.resource.data.tenantId) && request.resource.data.tenantId is int);
       allow update, delete: if false;
+    }
+
+    match /device_secrets/{secretDocId} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

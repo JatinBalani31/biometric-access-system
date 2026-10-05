@@ -2,10 +2,91 @@ import { Router, Response } from 'express';
 import crypto from 'crypto';
 import { createDoc, getDoc, updateDoc, listDocs, collections } from '../db/firestore.ts';
 import { Tenant, TenantAdmin, Subscriber, Device, SubscriptionPlan, AuditLog } from '../db/models.ts';
-import { AuthenticatedRequest, requireCompanyAdmin, requireTenantAdminOrCompany } from '../middleware/auth.ts';
+import { AuthenticatedRequest, requireCompanyAdmin, requireTenantAdminOrCompany, requireTenantPermission } from '../middleware/auth.ts';
+import { resolveTenantId } from '../middleware/auth.ts';
 import { logAuditAction } from '../lib/audit-logger.ts';
+import { resolveTenantLabels, tenantTypeConfig, tenantTypes, TenantLabels, TenantType } from '../lib/tenant-product.ts';
 
 export const tenantsRouter = Router();
+
+tenantsRouter.get('/me', requireTenantPermission('profile', 'read'), async (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) return res.status(400).json({ error: 'Tenant context required', code: 'BAD_REQUEST' });
+
+  try {
+    const tenant = await getDoc<Tenant>(collections.tenants, tenantId);
+    if (!tenant) return res.status(404).json({ error: 'Tenant not found', code: 'NOT_FOUND' });
+    return res.json(tenant);
+  } catch (error: any) {
+    return res.status(500).json({ error: 'Failed to fetch tenant profile', code: 'INTERNAL_ERROR', details: error.message });
+  }
+});
+
+tenantsRouter.patch('/me', requireTenantPermission('profile', 'update'), async (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) return res.status(400).json({ error: 'Tenant context required', code: 'BAD_REQUEST' });
+
+  try {
+    const current = await getDoc<Tenant>(collections.tenants, tenantId);
+    if (!current) return res.status(404).json({ error: 'Tenant not found', code: 'NOT_FOUND' });
+    const tenantType = req.body.tenantType ?? current.tenantType ?? 'gym';
+    if (!tenantTypes.includes(tenantType as TenantType)) {
+      return res.status(400).json({ error: 'tenantType must be gym, mess, or class', code: 'BAD_REQUEST' });
+    }
+    const labels = req.body.labels;
+    if (labels !== undefined && (!labels || typeof labels !== 'object' || Array.isArray(labels))) {
+      return res.status(400).json({ error: 'labels must be a label configuration object', code: 'BAD_REQUEST' });
+    }
+    const supported = ['customerSingular', 'customerPlural', 'offeringSingular', 'offeringPlural'] as const;
+    const labelUpdates: Partial<TenantLabels> = {};
+    if (labels) {
+      if (Object.keys(labels).some((key) => !supported.includes(key as (typeof supported)[number]))) {
+        return res.status(400).json({ error: 'Unsupported label field', code: 'BAD_REQUEST' });
+      }
+      for (const key of supported) {
+        if (labels[key] !== undefined) {
+          if (typeof labels[key] !== 'string' || !labels[key].trim() || labels[key].trim().length > 32) {
+            return res.status(400).json({ error: `${key} must be 1-32 characters`, code: 'BAD_REQUEST' });
+          }
+          labelUpdates[key] = labels[key].trim();
+        }
+      }
+    }
+    const next = {
+      tenantType: tenantType as TenantType,
+      labels: { ...(current.labels || {}), ...labelUpdates },
+    };
+    await updateDoc(collections.tenants, tenantId, next);
+    await logAuditAction({
+      actorEmail: req.auth?.email ?? 'unknown',
+      actorRole: req.auth?.tenantRole ?? req.auth?.role,
+      action: 'TENANT_CONFIGURATION_UPDATED',
+      tenantId,
+      targetType: 'tenant',
+      targetId: String(tenantId),
+      previousState: { tenantType: current.tenantType ?? 'gym', labels: current.labels ?? {} },
+      newState: next,
+      ipAddress: req.ip,
+    });
+    return res.json({ ...current, ...next, resolvedLabels: resolveTenantLabels(next.tenantType, next.labels) });
+  } catch (error: any) {
+    return res.status(500).json({ error: 'Failed to update tenant configuration', code: 'INTERNAL_ERROR', details: error.message });
+  }
+});
+
+tenantsRouter.get('/me/activity', requireTenantPermission('activity', 'read'), async (req: AuthenticatedRequest, res: Response) => {
+  const tenantId = resolveTenantId(req);
+  if (!tenantId) return res.status(400).json({ error: 'Tenant context required', code: 'BAD_REQUEST' });
+
+  try {
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
+    const logs = await listDocs<AuditLog>(collections.auditLogs, [['tenantId', '==', tenantId]]);
+    logs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return res.json({ logs: logs.slice(0, limit) });
+  } catch (error: any) {
+    return res.status(500).json({ error: 'Failed to fetch tenant activity', code: 'INTERNAL_ERROR', details: error.message });
+  }
+});
 
 // Helper to determine device sync health
 function computeSyncHealth(lastSyncedAt?: Date | string | null): { health: 'healthy' | 'warning' | 'stale' | 'never'; label: string } {
@@ -52,7 +133,7 @@ async function enrichTenant(t: Tenant) {
 }
 
 // GET /api/tenants - List tenants (Company Admin: all, Tenant Admin: own tenant)
-tenantsRouter.get('/', requireTenantAdminOrCompany, async (req: AuthenticatedRequest, res: Response) => {
+tenantsRouter.get('/', requireTenantPermission('profile', 'read'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const auth = req.auth!;
 
@@ -76,7 +157,7 @@ tenantsRouter.get('/', requireTenantAdminOrCompany, async (req: AuthenticatedReq
 });
 
 // GET /api/tenants/:id - Get full tenant details (including subscribers, devices & audit history)
-tenantsRouter.get('/:id', requireTenantAdminOrCompany, async (req: AuthenticatedRequest, res: Response) => {
+tenantsRouter.get('/:id', requireTenantPermission('profile', 'read'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const tenantId = parseInt(req.params.id, 10);
     if (isNaN(tenantId)) {
@@ -86,6 +167,9 @@ tenantsRouter.get('/:id', requireTenantAdminOrCompany, async (req: Authenticated
     const auth = req.auth!;
     if (auth.role === 'tenant_admin' && auth.tenantId !== tenantId) {
       return res.status(403).json({ error: 'Access denied to this tenant', code: 'FORBIDDEN' });
+    }
+    if (auth.role === 'tenant_admin' && auth.tenantRole !== 'owner') {
+      return res.status(403).json({ error: 'Full tenant details are available to owners only', code: 'FORBIDDEN' });
     }
 
     const tenant = await getDoc<Tenant>(collections.tenants, tenantId);
@@ -144,10 +228,14 @@ tenantsRouter.post('/', requireCompanyAdmin, async (req: AuthenticatedRequest, r
       subscriber_limit = 100,
       status = 'active',
       admin_email,
+      tenant_type = 'gym',
     } = req.body;
 
     if (!company_name || !contact_email) {
       return res.status(400).json({ error: 'company_name and contact_email are required', code: 'BAD_REQUEST' });
+    }
+    if (!tenantTypes.includes(tenant_type as TenantType)) {
+      return res.status(400).json({ error: 'tenant_type must be gym, mess, or class', code: 'BAD_REQUEST' });
     }
 
     const assignedAdminEmail = admin_email || contact_email;
@@ -162,6 +250,8 @@ tenantsRouter.post('/', requireCompanyAdmin, async (req: AuthenticatedRequest, r
       planTier: plan_tier,
       subscriberLimit: parseInt(String(subscriber_limit), 10) || 100,
       status,
+      tenantType: tenant_type as TenantType,
+      labels: tenantTypeConfig[tenant_type as TenantType].labels,
       createdAt: new Date().toISOString(),
     });
 

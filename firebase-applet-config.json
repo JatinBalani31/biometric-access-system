@@ -1,9 +1,9 @@
 {
   "projectId": "biometric-access-system1",
-  "appId": "1:108273645129:web:a9e3f52b4129bc78901234",
-  "apiKey": "AIzaSyD-MockFirebaseApiKey_PlatformB2B2026_Key",
+  "appId": "1:277059306058:web:571afbc41d67bc15ce5cb3",
+  "apiKey": "AIzaSyB-e4p_2EV0kUxhF0VZch5Pefp7NUKYyic",
   "authDomain": "biometric-access-system1.firebaseapp.com",
   "databaseURL": "https://biometric-access-system1-default-rtdb.firebaseio.com",
-  "storageBucket": "biometric-access-system1.appspot.com",
-  "messagingSenderId": "108273645129"
+  "storageBucket": "biometric-access-system1.firebasestorage.app",
+  "messagingSenderId": "277059306058"
 }

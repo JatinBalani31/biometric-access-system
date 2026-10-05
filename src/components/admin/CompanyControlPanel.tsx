@@ -1,5 +1,7 @@
 import { api } from '../../lib/api-client.ts';
 import React, { useState, useEffect } from 'react';
+import { signOut } from 'firebase/auth';
+import { auth } from '../../lib/firebase.ts';
 import {
   Shield,
   Building2,
@@ -237,7 +239,8 @@ export const CompanyControlPanel: React.FC<CompanyControlPanelProps> = ({
               </div>
 
               <button
-                onClick={() => {
+                onClick={async () => {
+                  await signOut(auth);
                   setCurrentUser(null);
                   showToast('Signed out of company control panel', 'info');
                 }}

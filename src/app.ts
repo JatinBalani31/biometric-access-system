@@ -3,6 +3,7 @@ import { authenticate } from './middleware/auth.ts';
 import { rateLimit } from './middleware/rate-limit.ts';
 import { tenantsRouter } from './routes/tenants.ts';
 import { plansRouter } from './routes/plans.ts';
+import { offeringsRouter } from './routes/offerings.ts';
 import { subscribersRouter } from './routes/subscribers.ts';
 import { devicesRouter } from './routes/devices.ts';
 import { kioskRouter } from './routes/kiosk.ts';
@@ -83,6 +84,7 @@ export function createApp() {
   // REST API Routes
   app.use('/api/tenants', tenantsRouter);
   app.use('/api/plans', plansRouter);
+  app.use('/api/offerings', offeringsRouter);
   app.use('/api/subscribers', subscribersRouter);
   app.use('/api/devices', devicesRouter);
   app.use('/api/kiosk', kioskRouter);

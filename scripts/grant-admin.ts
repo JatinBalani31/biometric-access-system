@@ -6,22 +6,25 @@
  * per admin account.
  *
  *   npx tsx scripts/grant-admin.ts <email> company_admin
- *   npx tsx scripts/grant-admin.ts <email> tenant_admin <tenantId>
+ *   npx tsx scripts/grant-admin.ts <email> tenant_admin <tenantId> [tenantRole]
  *
  * The account must already exist in Firebase Authentication (create it in the
  * console under Authentication → Users, or let the person sign up first).
  * The user must sign out and back in for a new claim to reach their token.
  */
 import { adminAuth } from '../src/lib/firebase-admin.ts';
-import { collections, createDoc, findOne } from '../src/db/firestore.ts';
+import { collections, createDoc, findOne, updateDoc } from '../src/db/firestore.ts';
 import { CompanyAdmin, TenantAdmin, Tenant } from '../src/db/models.ts';
 import { getDoc } from '../src/db/firestore.ts';
+import { tenantRoles, TenantRole } from '../src/lib/permissions.ts';
 
 async function main() {
-  const [email, role, tenantIdArg] = process.argv.slice(2);
+  const [email, role, tenantIdArg, tenantRoleArg = 'owner'] = process.argv.slice(2);
 
   if (!email || !role) {
-    console.error('Usage: npx tsx scripts/grant-admin.ts <email> <company_admin|tenant_admin> [tenantId]');
+    console.error(
+      'Usage: npx tsx scripts/grant-admin.ts <email> <company_admin|tenant_admin> [tenantId] [owner|manager|front-desk|read-only-auditor]'
+    );
     process.exit(1);
   }
 
@@ -32,19 +35,28 @@ async function main() {
 
   const tenantId = tenantIdArg ? parseInt(tenantIdArg, 10) : undefined;
 
-  if (role === 'tenant_admin' && (tenantId === undefined || Number.isNaN(tenantId))) {
+  if (role === 'tenant_admin' && (tenantId === undefined || !Number.isInteger(tenantId))) {
     console.error('tenant_admin requires a numeric tenantId as the third argument.');
     process.exit(1);
   }
 
+  if (role === 'tenant_admin' && !tenantRoles.includes(tenantRoleArg as TenantRole)) {
+    console.error(`Unknown tenant role "${tenantRoleArg}". Use: ${tenantRoles.join(', ')}.`);
+    process.exit(1);
+  }
+
   let user;
+  const projectId = adminAuth.app.options.projectId || process.env.FIREBASE_PROJECT_ID || 'unknown project';
   try {
     user = await adminAuth.getUserByEmail(email);
-  } catch {
-    console.error(
-      `No Firebase Auth user found for ${email}.\n` +
-      'Create the account first: Firebase Console → Authentication → Users → Add user.'
-    );
+  } catch (error: any) {
+    if (error?.code === 'auth/user-not-found') {
+      console.error(`No Firebase Auth user found for ${email} in project ${projectId}.`);
+      console.error('Check that the account was created in this exact Firebase project and that the email is correct.');
+    } else {
+      console.error(`Firebase Auth lookup failed in project ${projectId} (${error?.code || 'unknown error'}).`);
+      console.error(error?.message || 'Check Application Default Credentials and Firebase Authentication IAM permissions.');
+    }
     process.exit(1);
   }
 
@@ -57,13 +69,16 @@ async function main() {
     console.log(`Tenant ${tenantId} → ${tenant.companyName}`);
   }
 
-  const claims = role === 'company_admin' ? { role } : { role, tenantId };
+  const tenantRole = tenantRoleArg as TenantRole;
+  const claims = role === 'company_admin' ? { role } : { role, tenantId, tenantRole };
   await adminAuth.setCustomUserClaims(user.uid, claims);
 
   // Mirror into Firestore so the collection-lookup fallback and the admin lists agree.
   if (role === 'company_admin') {
     const existing = await findOne<CompanyAdmin>(collections.companyAdmins, 'email', email);
-    if (!existing) {
+    if (existing) {
+      await updateDoc(collections.companyAdmins, existing.id, { uid: user.uid, role });
+    } else {
       await createDoc<CompanyAdmin>(collections.companyAdmins, {
         email,
         uid: user.uid,
@@ -73,19 +88,28 @@ async function main() {
     }
   } else {
     const existing = await findOne<TenantAdmin>(collections.tenantAdmins, 'email', email);
-    if (!existing) {
+    if (existing) {
+      await updateDoc(collections.tenantAdmins, existing.id, {
+        tenantId: tenantId!,
+        email,
+        uid: user.uid,
+        role: tenantRole,
+      });
+    } else {
       await createDoc<TenantAdmin>(collections.tenantAdmins, {
         tenantId: tenantId!,
         email,
         uid: user.uid,
-        role: 'admin',
+        role: tenantRole,
         createdAt: new Date().toISOString(),
       } as any);
       console.log('Created tenant_admins record.');
     }
   }
 
-  console.log(`\nGranted ${role}${tenantId !== undefined ? ` (tenant ${tenantId})` : ''} to ${email}`);
+  console.log(
+    `\nGranted ${role}${tenantId !== undefined ? ` (${tenantRole}, tenant ${tenantId})` : ''} to ${email}`
+  );
   console.log('They must sign out and back in before the new claim reaches their token.');
   process.exit(0);
 }

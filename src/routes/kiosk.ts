@@ -1,7 +1,13 @@
 import { Router, Response } from 'express';
 import { getDoc, listDocs, findOne, clearCollection, collections } from '../db/firestore.ts';
 import { Subscriber, SubscriptionPlan } from '../db/models.ts';
-import { AuthenticatedRequest, requireCompanyAdmin, requireDeviceOrTenantAdmin, resolveTenantId } from '../middleware/auth.ts';
+import {
+  AuthenticatedRequest,
+  requireCompanyAdmin,
+  requireDeviceOrTenantPermission,
+  requireTenantPermission,
+  resolveTenantId,
+} from '../middleware/auth.ts';
 import { clearAllFirestoreEmbeddings, fetchFaceEmbeddingsForTenant, recordDeviceSyncLog, saveFaceEmbedding } from '../lib/firestore-sync.ts';
 import { logAuditAction } from '../lib/audit-logger.ts';
 import { DeviceSyncResponse, FACE_EMBEDDING_DIM, FACE_MODEL_ID, SYNTHETIC_MODEL_ID } from '../types/api.ts';
@@ -45,10 +51,11 @@ kioskRouter.post('/reset-all', requireCompanyAdmin, async (req: AuthenticatedReq
 });
 
 // GET /api/kiosk/face-embeddings - Incremental face embeddings sync for kiosk devices
-kioskRouter.get('/face-embeddings', requireDeviceOrTenantAdmin, async (req: AuthenticatedRequest, res: Response) => {
+kioskRouter.get('/face-embeddings', requireDeviceOrTenantPermission('biometrics', 'read'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const auth = req.auth!;
-    const tenantId = resolveTenantId(req) || 1;
+    const tenantId = resolveTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: 'Tenant context required', code: 'BAD_REQUEST' });
 
     const { since, page = '1', limit = '50' } = req.query;
     const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
@@ -131,9 +138,10 @@ kioskRouter.get('/face-embeddings', requireDeviceOrTenantAdmin, async (req: Auth
 });
 
 // POST /api/kiosk/verify-access - Fast lookup endpoint for kiosk turnstile/gate entry
-kioskRouter.post('/verify-access', requireDeviceOrTenantAdmin, async (req: AuthenticatedRequest, res: Response) => {
+kioskRouter.post('/verify-access', requireDeviceOrTenantPermission('subscribers', 'read'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const tenantId = resolveTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: 'Tenant context required', code: 'BAD_REQUEST' });
     const { subscriber_id, email, phone } = req.body;
 
     if (!subscriber_id && !email && !phone) {
@@ -197,9 +205,10 @@ kioskRouter.post('/verify-access', requireDeviceOrTenantAdmin, async (req: Authe
 });
 
 // POST /api/kiosk/enroll-face - Update / enroll on-device face vector for a subscriber
-kioskRouter.post('/enroll-face', requireDeviceOrTenantAdmin, async (req: AuthenticatedRequest, res: Response) => {
+kioskRouter.post('/enroll-face', requireTenantPermission('biometrics', 'create'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const tenantId = resolveTenantId(req);
+    if (!tenantId) return res.status(400).json({ error: 'Tenant context required', code: 'BAD_REQUEST' });
     const { subscriber_id, face_vector } = req.body;
 
     if (!subscriber_id || !face_vector || !Array.isArray(face_vector)) {
@@ -248,7 +257,7 @@ kioskRouter.post('/enroll-face', requireDeviceOrTenantAdmin, async (req: Authent
 
 // POST /api/kiosk/configure - Emergency config endpoint for when admin UI is broken
 // Allows setting backend URL + token via device token auth
-kioskRouter.post('/configure', requireDeviceOrTenantAdmin, (req: any, res: Response) => {
+kioskRouter.post('/configure', requireDeviceOrTenantPermission('devices', 'update'), (req: any, res: Response) => {
   try {
     const { backendUrl, deviceToken, threshold, syncIntervalMinutes } = req.body;
     const config: any = {};

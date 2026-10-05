@@ -21,8 +21,11 @@ export const collections = {
   tenants: 'tenants',
   tenantAdmins: 'tenant_admins',
   subscriptionPlans: 'subscription_plans',
+  offerings: 'offerings',
   subscribers: 'subscribers',
+  checkInLogs: 'check_in_logs',
   devices: 'devices',
+  deviceSecrets: 'device_secrets',
   companyAdmins: 'company_admins',
   auditLogs: 'audit_logs',
 } as const;

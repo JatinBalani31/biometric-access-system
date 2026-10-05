@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { adminAuth } from '../lib/firebase-admin.ts';
 import { findOne, getDoc, collections } from '../db/firestore.ts';
-import { Device, Tenant, CompanyAdmin, TenantAdmin } from '../db/models.ts';
+import { Device, DeviceSecret, Tenant, CompanyAdmin } from '../db/models.ts';
 import { AuthContext, ErrorResponse } from '../types/api.ts';
+import { canTenant, tenantRoles, TenantAction, TenantResource, TenantRole } from '../lib/permissions.ts';
 
 export interface AuthenticatedRequest extends Request {
   auth?: AuthContext;
@@ -21,6 +22,15 @@ if (SIMULATED_AUTH_ENABLED) {
     '[auth] ALLOW_SIMULATED_AUTH=true — x-simulated-role headers are honoured. ' +
     'This bypasses all authentication and must never be set in production.'
   );
+}
+
+async function findDeviceByToken(token: string): Promise<Device | null> {
+  const secret = await findOne<DeviceSecret>(collections.deviceSecrets, 'deviceToken', token);
+  if (secret) {
+    const device = await getDoc<Device>(collections.devices, secret.id);
+    return device?.tenantId === secret.tenantId ? device : null;
+  }
+  return findOne<Device>(collections.devices, 'deviceToken', token);
 }
 
 /**
@@ -51,7 +61,7 @@ export async function authenticate(
     }
 
     if (deviceToken) {
-      const matchedDevice = await findOne<Device>(collections.devices, 'deviceToken', deviceToken);
+      const matchedDevice = await findDeviceByToken(deviceToken);
       const tenant = matchedDevice ? await getDoc<Tenant>(collections.tenants, matchedDevice.tenantId) : null;
 
       if (!matchedDevice || matchedDevice.status === 'revoked') {
@@ -95,6 +105,10 @@ export async function authenticate(
 
       if (simulatedRole === 'tenant_admin') {
         const tenantId = simulatedTenantId ? parseInt(simulatedTenantId, 10) : 1;
+        const requestedTenantRole = req.headers['x-simulated-tenant-role'] as string | undefined;
+        const tenantRole = tenantRoles.includes(requestedTenantRole as TenantRole)
+          ? (requestedTenantRole as TenantRole)
+          : 'owner';
         const tenant = await getDoc<Tenant>(collections.tenants, tenantId);
 
         if (!tenant) {
@@ -117,6 +131,7 @@ export async function authenticate(
           tenantId: tenant.id,
           tenantName: tenant.companyName,
           tenantStatus: tenant.status,
+          tenantRole,
           email: simulatedEmail || `admin@${tenant.companyName.toLowerCase().replace(/[^a-z0-9]/g, '')}.com`,
           uid: `tenant-admin-${tenantId}-uid`,
         };
@@ -151,7 +166,7 @@ export async function authenticate(
       const token = authHeader.replace('Bearer ', '').trim();
 
       // Check if it's a known device token passed in standard Bearer
-      const matchedDevice = await findOne<Device>(collections.devices, 'deviceToken', token);
+      const matchedDevice = await findDeviceByToken(token);
 
       if (matchedDevice) {
         if (matchedDevice.status === 'revoked') {
@@ -192,13 +207,25 @@ export async function authenticate(
         // remain as a fallback for accounts provisioned before claims were set.
         const claimedRole = decoded.role as string | undefined;
         const claimedTenantId = decoded.tenantId as number | undefined;
+        const claimedTenantRole = decoded.tenantRole as string | undefined;
 
         if (claimedRole === 'company_admin') {
           req.auth = { role: 'company_admin', email, uid };
           return next();
         }
 
-        if (claimedRole === 'tenant_admin' && typeof claimedTenantId === 'number') {
+        if (claimedRole === 'tenant_admin') {
+          if (
+            typeof claimedTenantId !== 'number' ||
+            !Number.isInteger(claimedTenantId) ||
+            !tenantRoles.includes(claimedTenantRole as TenantRole)
+          ) {
+            return res.status(403).json({
+              error: 'Tenant access requires valid role, tenantId, and tenantRole claims.',
+              code: 'TENANT_CLAIMS_REQUIRED',
+            });
+          }
+
           const tenant = await getDoc<Tenant>(collections.tenants, claimedTenantId);
 
           if (!tenant || tenant.status === 'suspended') {
@@ -213,6 +240,7 @@ export async function authenticate(
             tenantId: claimedTenantId,
             tenantName: tenant.companyName,
             tenantStatus: tenant.status,
+            tenantRole: claimedTenantRole as TenantRole,
             email,
             uid,
           };
@@ -225,30 +253,6 @@ export async function authenticate(
         if (compAdmin) {
           req.auth = {
             role: 'company_admin',
-            email,
-            uid,
-          };
-          return next();
-        }
-
-        // Check if Tenant Admin
-        const tenAdmin = await findOne<TenantAdmin>(collections.tenantAdmins, 'email', email);
-
-        if (tenAdmin) {
-          const tenant = await getDoc<Tenant>(collections.tenants, tenAdmin.tenantId);
-
-          if (!tenant || tenant.status === 'suspended') {
-            return res.status(403).json({
-              error: 'Tenant subscription is suspended',
-              code: 'TENANT_SUSPENDED',
-            });
-          }
-
-          req.auth = {
-            role: 'tenant_admin',
-            tenantId: tenAdmin.tenantId,
-            tenantName: tenant.companyName,
-            tenantStatus: tenant.status,
             email,
             uid,
           };
@@ -320,6 +324,34 @@ export function requireTenantAdminOrCompany(
     return res.status(403).json(errorRes);
   }
   next();
+}
+
+export function requireTenantPermission(resource: TenantResource, action: TenantAction) {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (req.auth?.role === 'company_admin') return next();
+
+    const { tenantId, tenantRole } = req.auth ?? {};
+    if (
+      req.auth?.role !== 'tenant_admin' ||
+      !Number.isInteger(tenantId) ||
+      !canTenant(tenantRole, resource, action)
+    ) {
+      const errorRes: ErrorResponse = {
+        error: `Forbidden: ${resource} ${action} permission required`,
+        code: 'FORBIDDEN',
+      };
+      return res.status(403).json(errorRes);
+    }
+
+    next();
+  };
+}
+
+export function requireDeviceOrTenantPermission(resource: TenantResource, action: TenantAction) {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    if (req.auth?.role === 'device') return next();
+    return requireTenantPermission(resource, action)(req, res, next);
+  };
 }
 
 /**
